@@ -16,15 +16,15 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Unzip Project
+      - name: Unzip and Setup
         run: |
-          unzip -o AmarBus-Complete-Project.zip
-
-      - name: Fix Missing Icon and Build APK
-        run: |
-          cd android
+          # Kisi bhi naam ki nayi zip file ko dhoond kar extract karega
+          ZIP_NAME=$(ls *.zip | head -n 1)
+          echo "Unzipping: $ZIP_NAME"
+          unzip -o "$ZIP_NAME"
           
-          # Missing mipmap folders aur default icon banayega
+          cd android
+          # Missing launcher icons create karega taaki build crash na ho
           mkdir -p app/src/main/res/mipmap-anydpi-v26
           mkdir -p app/src/main/res/drawable
 
