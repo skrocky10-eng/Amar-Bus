@@ -16,14 +16,14 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v3
-
-      - name: Unzip and Build
+      - name: Unzip and Prepare Project
         run: |
           unzip -o AmarBus-Complete-Project.zip
           cd android
-          gradle assembleDebug --stacktrace
+          # Missing jar file ko generate karega
+          gradle wrapper
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -31,4 +31,3 @@ jobs:
         with:
           name: app-debug
           path: '**/build/outputs/apk/debug/*.apk'
-          
