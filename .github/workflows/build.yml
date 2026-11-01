@@ -10,20 +10,23 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
 
-      - name: Unzip and Setup Compatible Gradle
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Unzip and Build APK
         run: |
           unzip -o AmarBus-Complete-Project.zip
           cd android
-          # Compatible Gradle 8.4 wrapper download karega
           gradle wrapper --gradle-version 8.4 --distribution-type bin
           chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace --no-daemon
+          yes | sdkmanager --licenses || true
+          ./gradlew assembleDebug --no-daemon --info
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
