@@ -22,60 +22,105 @@ jobs:
           gradle-version: '8.4'
           cache-disabled: true
 
-      - name: Patch Native Kotlin Code and Build APK
+      - name: Safe Patch & Build Native APK
         run: |
           set -e
           ZIP_NAME=$(ls *.zip | head -n 1)
-          echo "Extracting project from: $ZIP_NAME"
+          echo "Extracting: $ZIP_NAME"
           unzip -o "$ZIP_NAME"
 
-          # 1. Fetch live UPI from version.json
+          # 1. Fetch live UPI ID from version.json
           NEW_UPI=$(curl -s "https://raw.githubusercontent.com/skrocky10-eng/Amar-Bus/main/version.json?t=$(date +%s)" | grep -o '"upiId": *"[^"]*"' | cut -d'"' -f4)
           if [ -z "$NEW_UPI" ]; then
             NEW_UPI="amarbus@upi"
           fi
-          echo "Applying Native UPI: $NEW_UPI"
+          echo "UPI ID to set: $NEW_UPI"
 
-          # 2. Patch Native Kotlin files directly using Python
+          # 2. Patch Native Kotlin files (UPI, #admin, Report Button & Native Update Dialog)
           python3 -c '
           import os, glob
 
-          kt_files = glob.glob("android/app/src/main/java/com/amarbus/app/**/*.kt", recursive=True)
+          files = glob.glob("android/app/src/main/java/**/*.kt", recursive=True) + glob.glob("android/app/src/main/res/**/*.xml", recursive=True)
           new_upi = "'"$NEW_UPI"'"
 
-          for kf in kt_files:
-              with open(kf, "r", encoding="utf-8", errors="ignore") as f:
-                  code = f.read()
+          for fpath in files:
+              with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                  content = f.read()
               
-              orig = code
-              
-              # A. Replace hardcoded UPI ID
-              if "amarbus@upi" in code:
-                  code = code.replace("amarbus@upi", new_upi)
-                  print(f"Replaced UPI in: {kf}")
+              orig = content
 
-              # B. Disable #admin trigger in native search query
-              if "#admin" in code:
-                  code = code.replace("#admin", "#disabled_admin_entry")
-                  print(f"Disabled #admin in: {kf}")
+              # A. Replace hardcoded UPI
+              if "amarbus@upi" in content:
+                  content = content.replace("amarbus@upi", new_upi)
+                  print("Replaced UPI in:", fpath)
 
-              # C. Remove "Report Actual Bus Time" composable blocks/buttons
-              if "Report Actual Bus Time" in code:
-                  # Replace the string or button label so it never displays
-                  code = code.replace("\"Report Actual Bus Time\"", "\"\"")
-                  print(f"Removed Report button text in: {kf}")
+              # B. Disable #admin popup
+              if "#admin" in content:
+                  content = content.replace("#admin", "#disabled_admin_panel")
+                  print("Disabled #admin in:", fpath)
 
-              if code != orig:
-                  with open(kf, "w", encoding="utf-8") as f:
-                      f.write(code)
+              # C. Remove Report Button text
+              if "Report Actual Bus Time" in content:
+                  content = content.replace("Report Actual Bus Time", "")
+                  print("Removed Report text in:", fpath)
+
+              # D. Inject Native Update Dialog in TimetableActivity.kt
+              if fpath.endswith("TimetableActivity.kt") and "checkAmarAppUpdate" not in content:
+                  update_helper = """
+                  private fun checkAmarAppUpdate() {
+                      kotlin.concurrent.thread {
+                          try {
+                              val url = java.net.URL("https://raw.githubusercontent.com/skrocky10-eng/Amar-Bus/main/version.json?t=" + System.currentTimeMillis())
+                              val conn = url.openConnection() as java.net.HttpURLConnection
+                              conn.connectTimeout = 4000
+                              conn.readTimeout = 4000
+                              val text = conn.inputStream.bufferedReader().use { it.readText() }
+                              val json = org.json.JSONObject(text)
+                              val hasUpdate = json.optBoolean("hasUpdate", false)
+                              val latestVersion = json.optInt("latestVersion", 1)
+                              val title = json.optString("title", "Update Available")
+                              val message = json.optString("message", "Amar Bus app ka naya version uplabdh hai.")
+                              val updateUrl = json.optString("updateUrl", "")
+
+                              if (hasUpdate && latestVersion > 1 && updateUrl.isNotEmpty()) {
+                                  runOnUiThread {
+                                      try {
+                                          android.app.AlertDialog.Builder(this)
+                                              .setTitle(title)
+                                              .setMessage(message)
+                                              .setCancelable(false)
+                                              .setPositiveButton("Update Now") { _, _ ->
+                                                  val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(updateUrl))
+                                                  startActivity(intent)
+                                              }
+                                              .show()
+                                      } catch (ignored: Exception) {}
+                                  }
+                              }
+                          } catch (ignored: Exception) {}
+                      }
+                  }
+                  """
+                  # Insert function before class end and call inside onCreate
+                  last_brace = content.rfind("}")
+                  if last_brace != -1:
+                      content = content[:last_brace] + update_helper + "\n}\n"
+                  
+                  if "super.onCreate" in content and "checkAmarAppUpdate()" not in content:
+                      content = content.replace("super.onCreate(savedInstanceState)", "super.onCreate(savedInstanceState)\n        checkAmarAppUpdate()")
+                  print("Injected Native Update Dialog in TimetableActivity.kt")
+
+              if content != orig:
+                  with open(fpath, "w", encoding="utf-8") as f:
+                      f.write(content)
           '
 
           cd android
 
-          # 3. Setup official Gradle Wrapper
+          # 3. Setup Gradle Wrapper using pre-installed Gradle
           gradle wrapper --gradle-version 8.4 --distribution-type bin
 
-          # 4. Custom App Icon setup
+          # 4. App Icon Setup (Optional, only if image exists)
           ICON_FILE=""
           if [ -f "../app_icon.png" ]; then
             ICON_FILE="../app_icon.png"
@@ -104,7 +149,7 @@ jobs:
             rm -rf app/src/main/res/mipmap-anydpi-v26
           fi
 
-          # 5. Build native APK
+          # 5. Build native APK directly
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
