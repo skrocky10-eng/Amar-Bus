@@ -23,28 +23,7 @@ jobs:
           unzip -o "$ZIP_NAME"
           cd android
 
-          # 1. Clean Google Analytics Injection
-          GA_ID="G-MDS74ENQJE"
-          python3 -c "
-          html_path = 'app/src/main/assets/dist/index.html'
-          try:
-              with open(html_path, 'r', encoding='utf-8') as f:
-                  content = f.read()
-              
-              ga_code = '''<script async src=\"https://www.googletagmanager.com/gtag/js?id=${GA_ID}\"></script><script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','${GA_ID}');</script>'''
-              
-              if '<head>' in content:
-                  content = content.replace('<head>', '<head>' + ga_code, 1)
-                  with open(html_path, 'w', encoding='utf-8') as f:
-                      f.write(content)
-                  print('Google Analytics successfully added to index.html')
-              else:
-                  print('Warning: <head> tag not found')
-          except Exception as e:
-              print(f'Analytics injection skipped: {e}')
-          "
-
-          # 2. Resource folders setup
+          # 1. Resource folders setup
           mkdir -p app/src/main/res/mipmap-hdpi
           mkdir -p app/src/main/res/mipmap-mdpi
           mkdir -p app/src/main/res/mipmap-xhdpi
@@ -52,7 +31,7 @@ jobs:
           mkdir -p app/src/main/res/mipmap-xxxhdpi
           mkdir -p app/src/main/res/drawable
 
-          # 3. Custom App Icon setup
+          # 2. Custom App Icon setup
           ICON_FILE=""
           if [ -f "../app_icon.png" ]; then
             ICON_FILE="../app_icon.png"
@@ -96,7 +75,7 @@ jobs:
             cp app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
           fi
 
-          # 4. AndroidManifest (Mic & Location Permissions)
+          # 3. AndroidManifest with Permissions
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -131,13 +110,14 @@ jobs:
           </manifest>
           EOF
 
-          # 5. MainActivity (Maps Links & Mic Handler)
+          # 4. MainActivity with Native Measurement Protocol Analytics
           mkdir -p app/src/main/java/com/amarbus/app
           cat << 'EOF' > app/src/main/java/com/amarbus/app/MainActivity.kt
           package com.amarbus.app
 
           import android.Manifest
           import android.annotation.SuppressLint
+          import android.content.Context
           import android.content.Intent
           import android.content.pm.PackageManager
           import android.net.Uri
@@ -151,16 +131,29 @@ jobs:
           import androidx.activity.ComponentActivity
           import androidx.core.app.ActivityCompat
           import androidx.core.content.ContextCompat
+          import java.io.OutputStreamWriter
+          import java.net.HttpURLConnection
+          import java.net.URL
+          import java.util.UUID
+          import kotlin.concurrent.thread
 
           class MainActivity : ComponentActivity() {
               private lateinit var webView: WebView
               private val PERMISSION_REQUEST_CODE = 1001
+
+              // Google Analytics GA4 Measurement Protocol Keys
+              private val GA_MEASUREMENT_ID = "G-MDS74ENQJE"
+              private val GA_API_SECRET = "ZMySZVn2QuWfuNw35s4FZQ"
 
               @SuppressLint("SetJavaScriptEnabled")
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
                   webView = WebView(this)
                   setContentView(webView)
+
+                  // Trigger Native Realtime Analytics Ping
+                  sendAnalyticsHit("app_open")
+                  sendAnalyticsHit("page_view")
 
                   checkPermissions()
 
@@ -220,6 +213,56 @@ jobs:
                   webView.loadUrl("file:///android_asset/dist/index.html")
               }
 
+              private fun getOrCreateClientId(): String {
+                  val prefs = getSharedPreferences("amarbus_analytics", Context.MODE_PRIVATE)
+                  var clientId = prefs.getString("client_id", null)
+                  if (clientId == null) {
+                      clientId = UUID.randomUUID().toString()
+                      prefs.edit().putString("client_id", clientId).apply()
+                  }
+                  return clientId
+              }
+
+              private fun sendAnalyticsHit(eventName: String) {
+                  thread {
+                      try {
+                          val clientId = getOrCreateClientId()
+                          val endpoint = "https://www.google-analytics.com/mp/collect?measurement_id=$GA_MEASUREMENT_ID&api_secret=$GA_API_SECRET"
+                          val url = URL(endpoint)
+                          val conn = url.openConnection() as HttpURLConnection
+                          conn.requestMethod = "POST"
+                          conn.setRequestProperty("Content-Type", "application/json; utf-8")
+                          conn.doOutput = true
+                          conn.connectTimeout = 5000
+                          conn.readTimeout = 5000
+
+                          // GA4 JSON Payload with engagement_time_msec to guarantee Realtime active display
+                          val jsonBody = """
+                          {
+                            "client_id": "$clientId",
+                            "events": [
+                              {
+                                "name": "$eventName",
+                                "params": {
+                                  "engagement_time_msec": 100,
+                                  "session_id": "1"
+                                }
+                              }
+                            ]
+                          }
+                          """.trimIndent()
+
+                          OutputStreamWriter(conn.outputStream).use { writer ->
+                              writer.write(jsonBody)
+                              writer.flush()
+                          }
+
+                          conn.responseCode
+                          conn.disconnect()
+                      } catch (ignored: Exception) {}
+                  }
+              }
+
               private fun checkPermissions() {
                   val permissionsNeeded = mutableListOf<String>()
                   if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -244,7 +287,7 @@ jobs:
           }
           EOF
 
-          # 6. Build execution
+          # 5. Build execution
           gradle wrapper --gradle-version 8.4 --distribution-type bin
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
