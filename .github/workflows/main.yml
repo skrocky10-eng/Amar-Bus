@@ -22,9 +22,110 @@ jobs:
           ZIP_NAME=$(ls *.zip | head -n 1)
           echo "Extracting project from: $ZIP_NAME"
           unzip -o "$ZIP_NAME"
+
+          # 1. Direct Patch into HTML (Report hide, UPI dynamic, #admin block, Update alert)
+          python3 -c '
+          import os, glob
+          target = "android/app/src/main/assets/dist/index.html"
+          if os.path.exists(target):
+              with open(target, "r", encoding="utf-8") as f:
+                  html = f.read()
+
+              patch = """
+              <style>
+                button:has-text("Report Actual Bus Time"),
+                [onclick*="Report"],
+                .report-btn { display: none !important; }
+              </style>
+              <div id="amarUpdateModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:999999; justify-content:center; align-items:center;">
+                <div style="background:#ffffff; border-radius:14px; width:82%; max-width:320px; padding:22px; text-align:center; font-family:sans-serif;">
+                  <h3 id="amarUpTitle" style="margin-top:0; color:#1a1a1a; font-size:18px;">Update Available</h3>
+                  <p id="amarUpMsg" style="color:#555; font-size:14px; line-height:1.4;">Amar Bus app ka naya version uplabdh hai.</p>
+                  <a id="amarUpBtn" href="#" style="display:block; background:#00875a; color:#ffffff; text-decoration:none; padding:11px; border-radius:8px; font-weight:bold; margin-top:15px;">Update Now</a>
+                </div>
+              </div>
+              <script>
+                (function() {
+                  function cleanDOM() {
+                    var all = document.querySelectorAll("*");
+                    for (var i = 0; i < all.length; i++) {
+                      var el = all[i];
+                      if (el.children.length === 0 && el.innerText && el.innerText.indexOf("Report Actual Bus Time") !== -1) {
+                        var p = el;
+                        while (p && p.tagName !== "BUTTON" && p !== document.body) { p = p.parentElement; }
+                        if (p) p.style.setProperty("display", "none", "important");
+                      }
+                      if (el.innerText && el.innerText.indexOf("Admin Access Verification") !== -1) {
+                        var mb = el;
+                        while (mb && mb.parentElement && mb.parentElement !== document.body) { mb = mb.parentElement; }
+                        if (mb) mb.style.setProperty("display", "none", "important");
+                      }
+                    }
+
+                    var inps = document.querySelectorAll("input");
+                    for (var j = 0; j < inps.length; j++) {
+                      if (!inps[j].dataset.adminPatched) {
+                        inps[j].dataset.adminPatched = "1";
+                        inps[j].addEventListener("input", function(e) {
+                          if (this.value && this.value.indexOf("#admin") !== -1) {
+                            this.value = this.value.replace("#admin", "");
+                            e.stopImmediatePropagation();
+                          }
+                        }, true);
+                      }
+                    }
+                  }
+                  cleanDOM();
+                  setInterval(cleanDOM, 500);
+
+                  fetch("https://raw.githubusercontent.com/skrocky10-eng/Amar-Bus/main/version.json?t=" + Date.now())
+                    .then(function(r){ return r.json(); })
+                    .then(function(d){
+                      if (d.upiId) {
+                        function updateUPI() {
+                          var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+                          var node;
+                          while (node = walker.nextNode()) {
+                            if (node.nodeValue && node.nodeValue.indexOf("@") !== -1) {
+                              node.nodeValue = node.nodeValue.replace(/[a-zA-Z0-9.\\-_]+@[a-zA-Z0-9]+/, d.upiId);
+                            }
+                          }
+                          var upiLinks = document.querySelectorAll(\x27a[href*="upi://pay"]\x27);
+                          for (var a = 0; a < upiLinks.length; a++) {
+                            upiLinks[a].href = upiLinks[a].href.replace(/pa=[^&]+/, "pa=" + d.upiId);
+                          }
+                          var copyEls = document.querySelectorAll(\x27[onclick*="copy"], button, a\x27);
+                          for (var c = 0; c < copyEls.length; c++) {
+                            var attr = copyEls[c].getAttribute("onclick");
+                            if (attr && attr.indexOf("@") !== -1) {
+                              copyEls[c].setAttribute("onclick", attr.replace(/[a-zA-Z0-9.\\-_]+@[a-zA-Z0-9]+/, d.upiId));
+                            }
+                          }
+                        }
+                        updateUPI();
+                        setInterval(updateUPI, 800);
+                      }
+                      if (d.hasUpdate && d.latestVersion > 1) {
+                        document.getElementById("amarUpTitle").innerText = d.title || "Update Available";
+                        document.getElementById("amarUpMsg").innerText = d.message || "Amar Bus app ka naya version uplabdh hai.";
+                        document.getElementById("amarUpBtn").href = d.updateUrl;
+                        document.getElementById("amarUpdateModal").style.display = "flex";
+                      }
+                    }).catch(function(){});
+                })();
+              </script>
+              """
+
+              if "</body>" in html and "amarUpdateModal" not in html:
+                  html = html.replace("</body>", patch + "\n</body>")
+                  with open(target, "w", encoding="utf-8") as f:
+                      f.write(html)
+                  print("Target HTML patched successfully!")
+          '
+
           cd android
 
-          # 1. Resource folders setup
+          # 2. Resource folders setup
           mkdir -p app/src/main/res/mipmap-hdpi
           mkdir -p app/src/main/res/mipmap-mdpi
           mkdir -p app/src/main/res/mipmap-xhdpi
@@ -32,7 +133,7 @@ jobs:
           mkdir -p app/src/main/res/mipmap-xxxhdpi
           mkdir -p app/src/main/res/drawable
 
-          # 2. Custom App Icon setup
+          # 3. Custom App Icon setup
           ICON_FILE=""
           if [ -f "../app_icon.png" ]; then
             ICON_FILE="../app_icon.png"
@@ -76,7 +177,7 @@ jobs:
             cp app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
           fi
 
-          # 3. AndroidManifest with Permissions
+          # 4. AndroidManifest with Permissions
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -111,7 +212,7 @@ jobs:
           </manifest>
           EOF
 
-          # 4. MainActivity with Native Analytics & WebView Handler
+          # 5. Native MainActivity (GA4 Tracking & Stable WebView)
           mkdir -p app/src/main/java/com/amarbus/app
           cat << 'EOF' > app/src/main/java/com/amarbus/app/MainActivity.kt
           package com.amarbus.app
@@ -180,96 +281,6 @@ jobs:
                   }
 
                   webView.webViewClient = object : WebViewClient() {
-                      override fun onPageFinished(view: WebView?, url: String?) {
-                          super.onPageFinished(view, url)
-
-                          // Pure clean script without syntax breaking characters
-                          val cleanScript = """
-                              javascript:(function() {
-                                  var st = document.createElement('style');
-                                  st.innerHTML = 'button:has-text("Report Actual Bus Time"), [onclick*="Report"], .report-btn { display: none !important; }';
-                                  document.head.appendChild(st);
-
-                                  function doPatch() {
-                                      var all = document.querySelectorAll('*');
-                                      for (var i = 0; i < all.length; i++) {
-                                          var el = all[i];
-                                          if (el.children.length === 0 && el.innerText && el.innerText.indexOf('Report Actual Bus Time') !== -1) {
-                                              var p = el;
-                                              while (p && p.tagName !== 'BUTTON' && p !== document.body) {
-                                                  p = p.parentElement;
-                                              }
-                                              if (p) p.style.setProperty('display', 'none', 'important');
-                                          }
-                                          if (el.innerText && el.innerText.indexOf('Admin Access Verification') !== -1) {
-                                              var mb = el;
-                                              while (mb && mb.parentElement && mb.parentElement !== document.body) {
-                                                  mb = mb.parentElement;
-                                              }
-                                              if (mb) mb.style.setProperty('display', 'none', 'important');
-                                          }
-                                      }
-
-                                      var inputs = document.querySelectorAll('input');
-                                      for (var j = 0; j < inputs.length; j++) {
-                                          if (!inputs[j].dataset.adminDone) {
-                                              inputs[j].dataset.adminDone = '1';
-                                              inputs[j].addEventListener('input', function(e) {
-                                                  if (this.value && this.value.indexOf('#admin') !== -1) {
-                                                      this.value = this.value.replace('#admin', '');
-                                                      e.stopImmediatePropagation();
-                                                  }
-                                              }, true);
-                                          }
-                                      }
-                                  }
-                                  doPatch();
-                                  setInterval(doPatch, 800);
-
-                                  fetch('https://raw.githubusercontent.com/skrocky10-eng/Amar-Bus/main/version.json?t=' + Date.now())
-                                      .then(function(r) { return r.json(); })
-                                      .then(function(d) {
-                                          if (d.upiId) {
-                                              function replaceUPI() {
-                                                  var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
-                                                  var node;
-                                                  while (node = walker.nextNode()) {
-                                                      if (node.nodeValue && node.nodeValue.indexOf('@') !== -1) {
-                                                          node.nodeValue = node.nodeValue.replace(/[a-zA-Z0-9.\\-_]+@[a-zA-Z0-9]+/, d.upiId);
-                                                      }
-                                                  }
-                                                  var upiLinks = document.querySelectorAll('a[href*="upi://pay"]');
-                                                  for (var a = 0; a < upiLinks.length; a++) {
-                                                      upiLinks[a].href = upiLinks[a].href.replace(/pa=[^&]+/, 'pa=' + d.upiId);
-                                                  }
-                                                  var copyElements = document.querySelectorAll('[onclick*="copy"], button, a');
-                                                  for (var c = 0; c < copyElements.length; c++) {
-                                                      var attr = copyElements[c].getAttribute('onclick');
-                                                      if (attr && attr.indexOf('@') !== -1) {
-                                                          copyElements[c].setAttribute('onclick', attr.replace(/[a-zA-Z0-9.\\-_]+@[a-zA-Z0-9]+/, d.upiId));
-                                                      }
-                                                  }
-                                              }
-                                              replaceUPI();
-                                              setInterval(replaceUPI, 1000);
-                                          }
-
-                                          if (d.hasUpdate && d.latestVersion > 1) {
-                                              if (!document.getElementById('amarUpdateModal')) {
-                                                  var m = document.createElement('div');
-                                                  m.id = 'amarUpdateModal';
-                                                  m.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:999999;display:flex;justify-content:center;align-items:center;';
-                                                  m.innerHTML = '<div style="background:#ffffff;border-radius:14px;width:82%;max-width:320px;padding:22px;text-align:center;font-family:sans-serif;"><h3 style="margin-top:0;color:#1a1a1a;font-size:18px;">' + (d.title || 'Update Available') + '</h3><p style="color:#555;font-size:14px;line-height:1.4;">' + (d.message || 'Amar Bus app ka naya version uplabdh hai.') + '</p><a href="' + d.updateUrl + '" style="display:block;background:#00875a;color:#ffffff;text-decoration:none;padding:11px;border-radius:8px;font-weight:bold;margin-top:15px;">Update Now</a></div>';
-                                                  document.body.appendChild(m);
-                                              }
-                                          }
-                                      }).catch(function() {});
-                              })();
-                          """.trimIndent()
-
-                          view?.loadUrl(cleanScript)
-                      }
-
                       override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
                           if (url == null) return false
 
@@ -375,5 +386,14 @@ jobs:
           }
           EOF
 
-          # 5. Build execution
-          gra
+          # 6. Build execution (Using repo gradlew wrapper)
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: amarbus-complete-apk
+          path: '**/build/outputs/apk/debug/*.apk'
+          
