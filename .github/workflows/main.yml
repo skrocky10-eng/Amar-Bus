@@ -22,7 +22,7 @@ jobs:
           gradle-version: '8.4'
           cache-disabled: true
 
-      - name: Extract, Safe Patch and Build Native APK
+      - name: Patch Native Kotlin Code and Build APK
         run: |
           set -e
           ZIP_NAME=$(ls *.zip | head -n 1)
@@ -34,84 +34,48 @@ jobs:
           if [ -z "$NEW_UPI" ]; then
             NEW_UPI="amarbus@upi"
           fi
-          echo "Using UPI ID: $NEW_UPI"
+          echo "Applying Native UPI: $NEW_UPI"
 
-          # 2. Patch pure Web Assets (No touching of Kotlin or Manifest)
+          # 2. Patch Native Kotlin files directly using Python
           python3 -c '
           import os, glob
 
-          target_js = glob.glob("android/app/src/main/assets/dist/assets/*.js")
-          target_html = glob.glob("android/app/src/main/assets/dist/index.html")
+          kt_files = glob.glob("android/app/src/main/java/com/amarbus/app/**/*.kt", recursive=True)
           new_upi = "'"$NEW_UPI"'"
 
-          # A. Replace plain text values inside compiled JS
-          for jf in target_js:
-              with open(jf, "r", encoding="utf-8", errors="ignore") as f:
-                  data = f.read()
-              modified = False
-              # Disable #admin trigger
-              if "#admin" in data:
-                  data = data.replace("#admin", "#disabled_admin_panel")
-                  modified = True
-              # Replace hardcoded UPI
-              if "amarbus@upi" in data and new_upi:
-                  data = data.replace("amarbus@upi", new_upi)
-                  modified = True
+          for kf in kt_files:
+              with open(kf, "r", encoding="utf-8", errors="ignore") as f:
+                  code = f.read()
+              
+              orig = code
+              
+              # A. Replace hardcoded UPI ID
+              if "amarbus@upi" in code:
+                  code = code.replace("amarbus@upi", new_upi)
+                  print(f"Replaced UPI in: {kf}")
 
-              # Safe update alert logic
-              update_addon = """
-              ;(function(){
-                setTimeout(function(){
-                  try {
-                    fetch("https://raw.githubusercontent.com/skrocky10-eng/Amar-Bus/main/version.json?t=" + Date.now())
-                      .then(function(r){ return r.json(); })
-                      .then(function(d){
-                        if(d && d.hasUpdate && d.latestVersion > 1){
-                          if(!document.getElementById("amarUpdateBox")){
-                            var b = document.createElement("div");
-                            b.id = "amarUpdateBox";
-                            b.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:9999999;display:flex;justify-content:center;align-items:center;";
-                            b.innerHTML = "<div style=\"background:#ffffff;border-radius:14px;width:82%;max-width:320px;padding:22px;text-align:center;font-family:sans-serif;\">" +
-                              "<h3 style=\"margin-top:0;color:#1a1a1a;font-size:18px;\">" + (d.title || "Update Available") + "</h3>" +
-                              "<p style=\"color:#555;font-size:14px;line-height:1.4;\">" + (d.message || "Amar Bus app ka naya version uplabdh hai.") + "</p>" +
-                              "<a href=\"" + d.updateUrl + "\" style=\"display:block;background:#00875a;color:#ffffff;text-decoration:none;padding:11px;border-radius:8px;font-weight:bold;margin-top:15px;\">Update Now</a>" +
-                            "</div>";
-                            document.body.appendChild(b);
-                          }
-                        }
-                      }).catch(function(e){});
-                  }catch(err){}
-                }, 1500);
-              })();
-              """
+              # B. Disable #admin trigger in native search query
+              if "#admin" in code:
+                  code = code.replace("#admin", "#disabled_admin_entry")
+                  print(f"Disabled #admin in: {kf}")
 
-              if len(data) > 40000 and "amarUpdateBox" not in data:
-                  data = data + "\n" + update_addon
-                  modified = True
+              # C. Remove "Report Actual Bus Time" composable blocks/buttons
+              if "Report Actual Bus Time" in code:
+                  # Replace the string or button label so it never displays
+                  code = code.replace("\"Report Actual Bus Time\"", "\"\"")
+                  print(f"Removed Report button text in: {kf}")
 
-              if modified:
-                  with open(jf, "w", encoding="utf-8") as f:
-                      f.write(data)
-                  print("Patched JS: " + jf)
-
-          # B. Hide Report Button via simple CSS
-          for hf in target_html:
-              with open(hf, "r", encoding="utf-8") as f:
-                  html_data = f.read()
-              css_rule = "<style>button:has-text(\"Report Actual Bus Time\"), [onclick*=\"Report\"], .report-btn { display: none !important; }</style>"
-              if "</head>" in html_data and "report-btn" not in html_data:
-                  html_data = html_data.replace("</head>", css_rule + "\n</head>")
-                  with open(hf, "w", encoding="utf-8") as f:
-                      f.write(html_data)
-                  print("Patched HTML: " + hf)
+              if code != orig:
+                  with open(kf, "w", encoding="utf-8") as f:
+                      f.write(code)
           '
 
           cd android
 
-          # 3. Setup Gradle Wrapper using pre-installed Gradle
+          # 3. Setup official Gradle Wrapper
           gradle wrapper --gradle-version 8.4 --distribution-type bin
 
-          # 4. Custom App Icon setup (if provided)
+          # 4. Custom App Icon setup
           ICON_FILE=""
           if [ -f "../app_icon.png" ]; then
             ICON_FILE="../app_icon.png"
@@ -140,7 +104,7 @@ jobs:
             rm -rf app/src/main/res/mipmap-anydpi-v26
           fi
 
-          # 5. Build execution using original repo setup
+          # 5. Build native APK
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
