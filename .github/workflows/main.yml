@@ -36,26 +36,26 @@ jobs:
           fi
           echo "Active UPI ID: $NEW_UPI"
 
-          # 2. Patch Web Assets Directly
+          # 2. Patch Assets (Zero HTML/JS Injection = Zero Blank Screen)
           python3 -c '
           import os, glob
 
+          # A. Block #admin and replace UPI directly inside JS bundles
           js_files = glob.glob("android/app/src/main/assets/dist/assets/*.js")
           new_upi = "'"$NEW_UPI"'"
-
           for jf in js_files:
               with open(jf, "r", encoding="utf-8", errors="ignore") as f:
                   data = f.read()
               mod = False
 
-              # A. Permanently lock admin access trigger
+              # Block admin prompt completely
               if "#admin" in data:
                   data = data.replace("\"#admin\"", "\"__BLOCKED_ADMIN_PANEL_KEY__\"")
                   data = data.replace("\x27#admin\x27", "\x27__BLOCKED_ADMIN_PANEL_KEY__\x27")
                   data = data.replace("#admin", "__BLOCKED_ADMIN_PANEL_KEY__")
                   mod = True
 
-              # B. Replace hardcoded UPI
+              # Update UPI ID
               if "amarbus@upi" in data and new_upi:
                   data = data.replace("amarbus@upi", new_upi)
                   mod = True
@@ -63,59 +63,15 @@ jobs:
               if mod:
                   with open(jf, "w", encoding="utf-8") as f:
                       f.write(data)
-                  print("Patched JS bundle successfully:", jf)
+                  print("Patched JS bundle cleanly:", jf)
 
-          # C. Inject foolproof CSS & DOM Observers into HTML
-          html_files = glob.glob("android/app/src/main/assets/dist/index.html")
-          for hf in html_files:
-              with open(hf, "r", encoding="utf-8") as f:
-                  html = f.read()
-
-              hide_patch = """
-              <style>
-                button:has-text("Report Actual Bus Time"),
-                button:has-text("Report"),
-                [onclick*="Report"],
-                .report-btn,
-                [data-report-btn] {
-                  display: none !important;
-                  visibility: hidden !important;
-                  height: 0 !important;
-                  padding: 0 !important;
-                  margin: 0 !important;
-                }
-              </style>
-              <script>
-                (function() {
-                  function killReport() {
-                    var els = document.querySelectorAll("button, a, div");
-                    for (var i = 0; i < els.length; i++) {
-                      var t = els[i].innerText;
-                      if (t && t.indexOf("Report Actual Bus Time") !== -1) {
-                        var p = els[i];
-                        while (p && p.tagName !== "BUTTON" && p.parentElement && p.parentElement !== document.body) {
-                          if (p.tagName === "BUTTON") break;
-                          p = p.parentElement;
-                        }
-                        if (p) {
-                          p.style.setProperty("display", "none", "important");
-                        }
-                      }
-                    }
-                  }
-                  document.addEventListener("DOMContentLoaded", killReport);
-                  var observer = new MutationObserver(killReport);
-                  observer.observe(document.documentElement, { childList: true, subtree: true });
-                  setInterval(killReport, 300);
-                })();
-              </script>
-              """
-
-              if "</head>" in html:
-                  html = html.replace("</head>", hide_patch + "\n</head>")
-                  with open(hf, "w", encoding="utf-8") as f:
-                      f.write(html)
-                  print("Patched index.html cleanly")
+          # B. Append hide rule directly to compiled CSS file (No HTML modification)
+          css_files = glob.glob("android/app/src/main/assets/dist/assets/*.css")
+          hide_css = "\nbutton:has-text(\"Report Actual Bus Time\"), [onclick*=\"Report\"], .report-btn, div:has(> button:has-text(\"Report\")) { display: none !important; visibility: hidden !important; height: 0 !important; margin: 0 !important; padding: 0 !important; }\n"
+          for cf in css_files:
+              with open(cf, "a", encoding="utf-8") as f:
+                  f.write(hide_css)
+              print("Appended clean hide rule into CSS bundle:", cf)
           '
 
           cd android
@@ -210,7 +166,7 @@ jobs:
           </manifest>
           EOF
 
-          # 7. MainActivity (Stable WebView + GA4 Tracking + Native Remote Update Check)
+          # 7. Stable MainActivity (Unmodified WebView client, pure loading)
           mkdir -p app/src/main/java/com/amarbus/app
           cat << 'EOF' > app/src/main/java/com/amarbus/app/MainActivity.kt
           package com.amarbus.app
