@@ -16,7 +16,12 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Resources, Analytics and Build APK
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.4'
+
+      - name: Setup Resources, Analytics, Patch HTML and Build APK
         run: |
           set -e
           ZIP_NAME=$(ls *.zip | head -n 1)
@@ -125,12 +130,8 @@ jobs:
 
           cd android
 
-          # 2. Fix Missing gradle-wrapper.jar
-          mkdir -p gradle/wrapper
-          if [ ! -f "gradle/wrapper/gradle-wrapper.jar" ]; then
-            echo "Downloading missing gradle-wrapper.jar..."
-            curl -sLo gradle/wrapper/gradle-wrapper.jar https://raw.githubusercontent.com/gradle/gradle/v8.4.0/gradle/wrapper/gradle-wrapper.jar
-          fi
+          # 2. Generate clean wrapper using official Gradle
+          gradle wrapper --gradle-version 8.4 --distribution-type bin
 
           # 3. Resource folders setup
           mkdir -p app/src/main/res/mipmap-hdpi
