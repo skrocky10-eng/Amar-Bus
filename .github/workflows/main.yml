@@ -21,127 +21,133 @@ jobs:
         with:
           gradle-version: '8.4'
 
-      - name: Setup Resources, Analytics, Patch HTML and Build APK
+      - name: Setup Resources, Analytics, Patch Web and Build APK
         run: |
           set -e
           ZIP_NAME=$(ls *.zip | head -n 1)
           echo "Extracting project from: $ZIP_NAME"
           unzip -o "$ZIP_NAME"
 
-          # 1. Direct Patch into HTML (Report hide, UPI dynamic, #admin block, Update alert)
-          python3 -c '
-          import os
-          target = "android/app/src/main/assets/dist/index.html"
-          if os.path.exists(target):
-              with open(target, "r", encoding="utf-8") as f:
-                  html = f.read()
+          # 1. Clean HTML Patch (Report Hide, Disable #admin, Remote UPI & Update Alert)
+          # Note: Original MainActivity.kt is NOT touched so the app NEVER goes blank.
+          TARGET_HTML="android/app/src/main/assets/dist/index.html"
+          if [ -f "$TARGET_HTML" ]; then
+            cat << 'EOF' > patch_script.html
+          <style id="amar-custom-style">
+            button:has-text("Report Actual Bus Time"),
+            [onclick*="Report"],
+            .report-btn {
+              display: none !important;
+            }
+          </style>
+          <div id="amarUpdateModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index:9999999; justify-content:center; align-items:center;">
+            <div style="background:#ffffff; border-radius:14px; width:82%; max-width:320px; padding:22px; text-align:center; font-family:sans-serif; box-shadow:0 10px 25px rgba(0,0,0,0.5);">
+              <h3 id="amarUpTitle" style="margin-top:0; color:#1a1a1a; font-size:18px;">Update Available</h3>
+              <p id="amarUpMsg" style="color:#555; font-size:14px; line-height:1.4; margin:12px 0 18px 0;">Amar Bus app ka naya version uplabdh hai.</p>
+              <a id="amarUpBtn" href="#" style="display:block; background:#00875a; color:#ffffff; text-decoration:none; padding:11px; border-radius:8px; font-weight:bold; font-size:15px;">Update Now</a>
+            </div>
+          </div>
+          <script>
+            (function() {
+              // 1. Hide Report Button & Disable #admin trigger
+              function applySafeguards() {
+                var els = document.querySelectorAll('*');
+                for (var i = 0; i < els.length; i++) {
+                  var el = els[i];
+                  if (el.children.length === 0 && el.innerText && el.innerText.indexOf('Report Actual Bus Time') !== -1) {
+                    var p = el;
+                    while (p && p.tagName !== 'BUTTON' && p !== document.body) { p = p.parentElement; }
+                    if (p) p.style.setProperty('display', 'none', 'important');
+                  }
+                  if (el.innerText && el.innerText.indexOf('Admin Access Verification') !== -1) {
+                    var mb = el;
+                    while (mb && mb.parentElement && mb.parentElement !== document.body) { mb = mb.parentElement; }
+                    if (mb) mb.style.setProperty('display', 'none', 'important');
+                  }
+                }
 
-              patch = """
-              <style>
-                button:has-text("Report Actual Bus Time"),
-                [onclick*="Report"],
-                .report-btn { display: none !important; }
-              </style>
-              <div id="amarUpdateModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:999999; justify-content:center; align-items:center;">
-                <div style="background:#ffffff; border-radius:14px; width:82%; max-width:320px; padding:22px; text-align:center; font-family:sans-serif;">
-                  <h3 id="amarUpTitle" style="margin-top:0; color:#1a1a1a; font-size:18px;">Update Available</h3>
-                  <p id="amarUpMsg" style="color:#555; font-size:14px; line-height:1.4;">Amar Bus app ka naya version uplabdh hai.</p>
-                  <a id="amarUpBtn" href="#" style="display:block; background:#00875a; color:#ffffff; text-decoration:none; padding:11px; border-radius:8px; font-weight:bold; margin-top:15px;">Update Now</a>
-                </div>
-              </div>
-              <script>
-                (function() {
-                  function cleanDOM() {
-                    var all = document.querySelectorAll("*");
-                    for (var i = 0; i < all.length; i++) {
-                      var el = all[i];
-                      if (el.children.length === 0 && el.innerText && el.innerText.indexOf("Report Actual Bus Time") !== -1) {
-                        var p = el;
-                        while (p && p.tagName !== "BUTTON" && p !== document.body) { p = p.parentElement; }
-                        if (p) p.style.setProperty("display", "none", "important");
+                var inps = document.querySelectorAll('input');
+                for (var j = 0; j < inps.length; j++) {
+                  if (!inps[j].dataset.adminPatched) {
+                    inps[j].dataset.adminPatched = '1';
+                    inps[j].addEventListener('input', function(e) {
+                      if (this.value && this.value.indexOf('#admin') !== -1) {
+                        this.value = this.value.replace('#admin', '');
+                        e.stopImmediatePropagation();
                       }
-                      if (el.innerText && el.innerText.indexOf("Admin Access Verification") !== -1) {
-                        var mb = el;
-                        while (mb && mb.parentElement && mb.parentElement !== document.body) { mb = mb.parentElement; }
-                        if (mb) mb.style.setProperty("display", "none", "important");
+                    }, true);
+                  }
+                }
+              }
+              applySafeguards();
+              setInterval(applySafeguards, 600);
+
+              // 2. Remote UPI ID Replacement from version.json
+              fetch('https://raw.githubusercontent.com/skrocky10-eng/Amar-Bus/main/version.json?t=' + Date.now())
+                .then(function(res) { return res.json(); })
+                .then(function(data) {
+                  if (data.upiId) {
+                    function updateUPIElements() {
+                      var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+                      var node;
+                      while (node = walker.nextNode()) {
+                        if (node.nodeValue && node.nodeValue.indexOf('@') !== -1) {
+                          node.nodeValue = node.nodeValue.replace(/[a-zA-Z0-9.\\-_]+@[a-zA-Z0-9]+/, data.upiId);
+                        }
+                      }
+                      var upiLinks = document.querySelectorAll('a[href*="upi://pay"]');
+                      for (var a = 0; a < upiLinks.length; a++) {
+                        upiLinks[a].href = upiLinks[a].href.replace(/pa=[^&]+/, 'pa=' + data.upiId);
+                      }
+                      var copyEls = document.querySelectorAll('[onclick*="copy"], button, a');
+                      for (var c = 0; c < copyEls.length; c++) {
+                        var attr = copyEls[c].getAttribute('onclick');
+                        if (attr && attr.indexOf('@') !== -1) {
+                          copyEls[c].setAttribute('onclick', attr.replace(/[a-zA-Z0-9.\\-_]+@[a-zA-Z0-9]+/, data.upiId));
+                        }
                       }
                     }
+                    updateUPIElements();
+                    setInterval(updateUPIElements, 800);
+                  }
 
-                    var inps = document.querySelectorAll("input");
-                    for (var j = 0; j < inps.length; j++) {
-                      if (!inps[j].dataset.adminPatched) {
-                        inps[j].dataset.adminPatched = "1";
-                        inps[j].addEventListener("input", function(e) {
-                          if (this.value && this.value.indexOf("#admin") !== -1) {
-                            this.value = this.value.replace("#admin", "");
-                            e.stopImmediatePropagation();
-                          }
-                        }, true);
-                      }
+                  // 3. Update Alert Dialog
+                  if (data.hasUpdate && data.latestVersion > 1) {
+                    var modal = document.getElementById('amarUpdateModal');
+                    if (modal) {
+                      document.getElementById('amarUpTitle').innerText = data.title || 'Update Available';
+                      document.getElementById('amarUpMsg').innerText = data.message || 'Amar Bus app ka naya version uplabdh hai.';
+                      document.getElementById('amarUpBtn').href = data.updateUrl;
+                      modal.style.display = 'flex';
                     }
                   }
-                  cleanDOM();
-                  setInterval(cleanDOM, 500);
+                })
+                .catch(function(err) {});
+            })();
+          </script>
+          EOF
 
-                  fetch("https://raw.githubusercontent.com/skrocky10-eng/Amar-Bus/main/version.json?t=" + Date.now())
-                    .then(function(r){ return r.json(); })
-                    .then(function(d){
-                      if (d.upiId) {
-                        function updateUPI() {
-                          var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
-                          var node;
-                          while (node = walker.nextNode()) {
-                            if (node.nodeValue && node.nodeValue.indexOf("@") !== -1) {
-                              node.nodeValue = node.nodeValue.replace(/[a-zA-Z0-9.\\-_]+@[a-zA-Z0-9]+/, d.upiId);
-                            }
-                          }
-                          var upiLinks = document.querySelectorAll(\x27a[href*="upi://pay"]\x27);
-                          for (var a = 0; a < upiLinks.length; a++) {
-                            upiLinks[a].href = upiLinks[a].href.replace(/pa=[^&]+/, "pa=" + d.upiId);
-                          }
-                          var copyEls = document.querySelectorAll(\x27[onclick*="copy"], button, a\x27);
-                          for (var c = 0; c < copyEls.length; c++) {
-                            var attr = copyEls[c].getAttribute("onclick");
-                            if (attr && attr.indexOf("@") !== -1) {
-                              copyEls[c].setAttribute("onclick", attr.replace(/[a-zA-Z0-9.\\-_]+@[a-zA-Z0-9]+/, d.upiId));
-                            }
-                          }
-                        }
-                        updateUPI();
-                        setInterval(updateUPI, 800);
-                      }
-                      if (d.hasUpdate && d.latestVersion > 1) {
-                        document.getElementById("amarUpTitle").innerText = d.title || "Update Available";
-                        document.getElementById("amarUpMsg").innerText = d.message || "Amar Bus app ka naya version uplabdh hai.";
-                        document.getElementById("amarUpBtn").href = d.updateUrl;
-                        document.getElementById("amarUpdateModal").style.display = "flex";
-                      }
-                    }).catch(function(){});
-                })();
-              </script>
-              """
-
-              if "</body>" in html and "amarUpdateModal" not in html:
-                  html = html.replace("</body>", patch + "\n</body>")
-                  with open(target, "w", encoding="utf-8") as f:
-                      f.write(html)
-                  print("Target HTML patched successfully!")
+            # Insert patch right before </body> safely using Python
+            python3 -c '
+          with open("android/app/src/main/assets/dist/index.html", "r", encoding="utf-8") as f:
+              html = f.read()
+          with open("patch_script.html", "r", encoding="utf-8") as pf:
+              patch = pf.read()
+          if "</body>" in html and "amarUpdateModal" not in html:
+              html = html.replace("</body>", patch + "\n</body>")
+              with open("android/app/src/main/assets/dist/index.html", "w", encoding="utf-8") as f:
+                  f.write(html)
+              print("index.html patched cleanly without touching native Kotlin code!")
           '
+            rm patch_script.html
+          fi
 
           cd android
 
-          # 2. Generate clean wrapper using official Gradle
+          # 2. Setup Gradle Wrapper using pre-installed Gradle
           gradle wrapper --gradle-version 8.4 --distribution-type bin
 
-          # 3. Resource folders setup
-          mkdir -p app/src/main/res/mipmap-hdpi
-          mkdir -p app/src/main/res/mipmap-mdpi
-          mkdir -p app/src/main/res/mipmap-xhdpi
-          mkdir -p app/src/main/res/mipmap-xxhdpi
-          mkdir -p app/src/main/res/mipmap-xxxhdpi
-          mkdir -p app/src/main/res/drawable
-
-          # 4. Custom App Icon setup
+          # 3. Custom App Icon setup
           ICON_FILE=""
           if [ -f "../app_icon.png" ]; then
             ICON_FILE="../app_icon.png"
@@ -150,6 +156,12 @@ jobs:
           fi
 
           if [ -n "$ICON_FILE" ]; then
+            mkdir -p app/src/main/res/mipmap-hdpi
+            mkdir -p app/src/main/res/mipmap-mdpi
+            mkdir -p app/src/main/res/mipmap-xhdpi
+            mkdir -p app/src/main/res/mipmap-xxhdpi
+            mkdir -p app/src/main/res/mipmap-xxxhdpi
+
             cp "$ICON_FILE" app/src/main/res/mipmap-hdpi/ic_launcher.png
             cp "$ICON_FILE" app/src/main/res/mipmap-mdpi/ic_launcher.png
             cp "$ICON_FILE" app/src/main/res/mipmap-xhdpi/ic_launcher.png
@@ -162,239 +174,9 @@ jobs:
             cp "$ICON_FILE" app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png
             cp "$ICON_FILE" app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
             rm -rf app/src/main/res/mipmap-anydpi-v26
-          else
-            mkdir -p app/src/main/res/mipmap-anydpi-v26
-            cat << 'EOF' > app/src/main/res/drawable/ic_launcher_background.xml
-          <?xml version="1.0" encoding="utf-8"?>
-          <vector xmlns:android="http://schemas.android.com/apk/res/android"
-              android:width="108dp"
-              android:height="108dp"
-              android:viewportWidth="108"
-              android:viewportHeight="108">
-              <path android:fillColor="#1B5E20" android:pathData="M0,0h108v108h-108z"/>
-          </vector>
-          EOF
-
-            cat << 'EOF' > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
-          <?xml version="1.0" encoding="utf-8"?>
-          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-              <background android:drawable="@drawable/ic_launcher_background"/>
-              <foreground android:drawable="@drawable/ic_launcher_background"/>
-          </adaptive-icon>
-          EOF
-            cp app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
           fi
 
-          # 5. AndroidManifest with Permissions
-          cat << 'EOF' > app/src/main/AndroidManifest.xml
-          <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
-              <uses-permission android:name="android.permission.INTERNET" />
-              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-              <uses-permission android:name="android.permission.RECORD_AUDIO" />
-              <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
-              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-              <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-
-              <application
-                  android:allowBackup="true"
-                  android:icon="@mipmap/ic_launcher"
-                  android:label="@string/app_name"
-                  android:roundIcon="@mipmap/ic_launcher_round"
-                  android:supportsRtl="true"
-                  android:usesCleartextTraffic="true"
-                  android:theme="@style/Theme.AmarBus">
-                  <activity
-                      android:name=".MainActivity"
-                      android:exported="true"
-                      android:configChanges="orientation|screenSize|keyboardHidden"
-                      android:theme="@style/Theme.AmarBus">
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN" />
-                          <category android:name="android.intent.category.LAUNCHER" />
-                      </intent-filter>
-                  </activity>
-              </application>
-
-          </manifest>
-          EOF
-
-          # 6. Native MainActivity (GA4 Analytics + Webview)
-          mkdir -p app/src/main/java/com/amarbus/app
-          cat << 'EOF' > app/src/main/java/com/amarbus/app/MainActivity.kt
-          package com.amarbus.app
-
-          import android.Manifest
-          import android.annotation.SuppressLint
-          import android.content.Context
-          import android.content.Intent
-          import android.content.pm.PackageManager
-          import android.net.Uri
-          import android.os.Bundle
-          import android.view.View
-          import android.webkit.PermissionRequest
-          import android.webkit.WebChromeClient
-          import android.webkit.WebSettings
-          import android.webkit.WebView
-          import android.webkit.WebViewClient
-          import androidx.activity.ComponentActivity
-          import androidx.core.app.ActivityCompat
-          import androidx.core.content.ContextCompat
-          import java.io.OutputStreamWriter
-          import java.net.HttpURLConnection
-          import java.net.URL
-          import java.util.UUID
-          import kotlin.concurrent.thread
-
-          class MainActivity : ComponentActivity() {
-              private lateinit var webView: WebView
-              private val PERMISSION_REQUEST_CODE = 1001
-
-              private val GA_MEASUREMENT_ID = "G-MDS74ENQJE"
-              private val GA_API_SECRET = "ZMySZVn2QuWfuNw35s4FZQ"
-
-              @SuppressLint("SetJavaScriptEnabled")
-              override fun onCreate(savedInstanceState: Bundle?) {
-                  super.onCreate(savedInstanceState)
-                  webView = WebView(this)
-                  setContentView(webView)
-
-                  sendAnalyticsHit("app_open")
-                  sendAnalyticsHit("page_view")
-
-                  checkPermissions()
-
-                  webView.settings.apply {
-                      javaScriptEnabled = true
-                      domStorageEnabled = true
-                      databaseEnabled = true
-                      allowFileAccess = true
-                      allowContentAccess = true
-                      allowFileAccessFromFileURLs = true
-                      allowUniversalAccessFromFileURLs = true
-                      cacheMode = WebSettings.LOAD_DEFAULT
-                      mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                      useWideViewPort = true
-                      loadWithOverviewMode = true
-                      mediaPlaybackRequiresUserGesture = false
-                  }
-
-                  webView.scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
-
-                  webView.webChromeClient = object : WebChromeClient() {
-                      override fun onPermissionRequest(request: PermissionRequest?) {
-                          request?.grant(request.resources)
-                      }
-                  }
-
-                  webView.webViewClient = object : WebViewClient() {
-                      override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
-                          if (url == null) return false
-
-                          if (url.startsWith("intent://") || url.startsWith("https://www.google.com/maps") || url.startsWith("https://maps.google.com")) {
-                              try {
-                                  val intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
-                                  if (intent != null) {
-                                      view?.context?.startActivity(intent)
-                                      return true
-                                  }
-                              } catch (e: Exception) {
-                                  try {
-                                      val fallbackUrl = url.replace("intent://", "https://")
-                                      val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(fallbackUrl))
-                                      view?.context?.startActivity(browserIntent)
-                                      return true
-                                  } catch (ignored: Exception) {}
-                              }
-                          } else if (url.startsWith("tel:") || url.startsWith("mailto:") || url.startsWith("geo:") || url.startsWith("upi:")) {
-                              val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                              view?.context?.startActivity(intent)
-                              return true
-                          }
-
-                          url.let { view?.loadUrl(it) }
-                          return true
-                      }
-                  }
-
-                  webView.loadUrl("file:///android_asset/dist/index.html")
-              }
-
-              private fun getOrCreateClientId(): String {
-                  val prefs = getSharedPreferences("amarbus_analytics", Context.MODE_PRIVATE)
-                  var clientId = prefs.getString("client_id", null)
-                  if (clientId == null) {
-                      clientId = UUID.randomUUID().toString()
-                      prefs.edit().putString("client_id", clientId).apply()
-                  }
-                  return clientId
-              }
-
-              private fun sendAnalyticsHit(eventName: String) {
-                  thread {
-                      try {
-                          val clientId = getOrCreateClientId()
-                          val endpoint = "https://www.google-analytics.com/mp/collect?measurement_id=$GA_MEASUREMENT_ID&api_secret=$GA_API_SECRET"
-                          val url = URL(endpoint)
-                          val conn = url.openConnection() as HttpURLConnection
-                          conn.requestMethod = "POST"
-                          conn.setRequestProperty("Content-Type", "application/json; utf-8")
-                          conn.doOutput = true
-                          conn.connectTimeout = 5000
-                          conn.readTimeout = 5000
-
-                          val jsonBody = """
-                          {
-                            "client_id": "$clientId",
-                            "events": [
-                              {
-                                "name": "$eventName",
-                                "params": {
-                                  "engagement_time_msec": 100,
-                                  "session_id": "1"
-                                }
-                              }
-                            ]
-                          }
-                          """.trimIndent()
-
-                          OutputStreamWriter(conn.outputStream).use { writer ->
-                              writer.write(jsonBody)
-                              writer.flush()
-                          }
-
-                          conn.responseCode
-                          conn.disconnect()
-                      } catch (ignored: Exception) {}
-                  }
-              }
-
-              private fun checkPermissions() {
-                  val permissionsNeeded = mutableListOf<String>()
-                  if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                      permissionsNeeded.add(Manifest.permission.RECORD_AUDIO)
-                  }
-                  if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-                      permissionsNeeded.add(Manifest.permission.ACCESS_FINE_LOCATION)
-                  }
-                  if (permissionsNeeded.isNotEmpty()) {
-                      ActivityCompat.requestPermissions(this, permissionsNeeded.toTypedArray(), PERMISSION_REQUEST_CODE)
-                  }
-              }
-
-              @Deprecated("Deprecated in Java")
-              override fun onBackPressed() {
-                  if (webView.canGoBack()) {
-                      webView.goBack()
-                      return
-                  }
-                  super.onBackPressed()
-              }
-          }
-          EOF
-
-          # 7. Build execution
+          # 4. Build execution
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
