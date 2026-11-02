@@ -22,21 +22,21 @@ jobs:
           gradle-version: '8.4'
           cache-disabled: true
 
-      - name: Setup Resources, Safe Patch and Build APK
+      - name: Extract, Safe Patch and Build Native APK
         run: |
           set -e
           ZIP_NAME=$(ls *.zip | head -n 1)
           echo "Extracting project from: $ZIP_NAME"
           unzip -o "$ZIP_NAME"
 
-          # 1. Fetch live UPI from GitHub version.json
+          # 1. Fetch live UPI from version.json
           NEW_UPI=$(curl -s "https://raw.githubusercontent.com/skrocky10-eng/Amar-Bus/main/version.json?t=$(date +%s)" | grep -o '"upiId": *"[^"]*"' | cut -d'"' -f4)
           if [ -z "$NEW_UPI" ]; then
             NEW_UPI="amarbus@upi"
           fi
-          echo "Active UPI ID fetched: $NEW_UPI"
+          echo "Using UPI ID: $NEW_UPI"
 
-          # 2. Patch JS Bundles safely (Zero Blank Screen Risk + Remote Update Support)
+          # 2. Patch pure Web Assets (No touching of Kotlin or Manifest)
           python3 -c '
           import os, glob
 
@@ -44,63 +44,66 @@ jobs:
           target_html = glob.glob("android/app/src/main/assets/dist/index.html")
           new_upi = "'"$NEW_UPI"'"
 
-          # Update Modal & Check Logic to append safely in JS
-          update_script = """
-          ;(function(){
-            setTimeout(function(){
-              fetch("https://raw.githubusercontent.com/skrocky10-eng/Amar-Bus/main/version.json?t=" + Date.now())
-                .then(function(res){ return res.json(); })
-                .then(function(data){
-                  if(data && data.hasUpdate && data.latestVersion > 1){
-                    if(!document.getElementById("amarUpdateBox")){
-                      var box = document.createElement("div");
-                      box.id = "amarUpdateBox";
-                      box.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:9999999;display:flex;justify-content:center;align-items:center;";
-                      box.innerHTML = "<div style=\"background:#ffffff;border-radius:14px;width:82%;max-width:320px;padding:22px;text-align:center;font-family:sans-serif;box-shadow:0 10px 25px rgba(0,0,0,0.5);\">" +
-                        "<h3 style=\"margin-top:0;color:#1a1a1a;font-size:18px;\">" + (data.title || "Update Available") + "</h3>" +
-                        "<p style=\"color:#555;font-size:14px;line-height:1.4;margin:12px 0 18px 0;\">" + (data.message || "Amar Bus app ka naya version uplabdh hai.") + "</p>" +
-                        "<a href=\"" + data.updateUrl + "\" style=\"display:block;background:#00875a;color:#ffffff;text-decoration:none;padding:11px;border-radius:8px;font-weight:bold;font-size:15px;\">Update Now</a>" +
-                      "</div>";
-                      document.body.appendChild(box);
-                    }
-                  }
-                }).catch(function(e){});
-            }, 1500);
-          })();
-          """
-
-          # A. Patch JS files: Replace #admin trigger, Replace UPI, Append Update Checker
+          # A. Replace plain text values inside compiled JS
           for jf in target_js:
               with open(jf, "r", encoding="utf-8", errors="ignore") as f:
                   data = f.read()
               modified = False
+              # Disable #admin trigger
               if "#admin" in data:
-                  data = data.replace("#admin", "#disabled_adm_trigger")
+                  data = data.replace("#admin", "#disabled_admin_panel")
                   modified = True
+              # Replace hardcoded UPI
               if "amarbus@upi" in data and new_upi:
                   data = data.replace("amarbus@upi", new_upi)
                   modified = True
-              
-              # Append update logic to the largest main JS bundle
-              if len(data) > 50000 and "amarUpdateBox" not in data:
-                  data = data + "\n" + update_script
+
+              # Safe update alert logic
+              update_addon = """
+              ;(function(){
+                setTimeout(function(){
+                  try {
+                    fetch("https://raw.githubusercontent.com/skrocky10-eng/Amar-Bus/main/version.json?t=" + Date.now())
+                      .then(function(r){ return r.json(); })
+                      .then(function(d){
+                        if(d && d.hasUpdate && d.latestVersion > 1){
+                          if(!document.getElementById("amarUpdateBox")){
+                            var b = document.createElement("div");
+                            b.id = "amarUpdateBox";
+                            b.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:9999999;display:flex;justify-content:center;align-items:center;";
+                            b.innerHTML = "<div style=\"background:#ffffff;border-radius:14px;width:82%;max-width:320px;padding:22px;text-align:center;font-family:sans-serif;\">" +
+                              "<h3 style=\"margin-top:0;color:#1a1a1a;font-size:18px;\">" + (d.title || "Update Available") + "</h3>" +
+                              "<p style=\"color:#555;font-size:14px;line-height:1.4;\">" + (d.message || "Amar Bus app ka naya version uplabdh hai.") + "</p>" +
+                              "<a href=\"" + d.updateUrl + "\" style=\"display:block;background:#00875a;color:#ffffff;text-decoration:none;padding:11px;border-radius:8px;font-weight:bold;margin-top:15px;\">Update Now</a>" +
+                            "</div>";
+                            document.body.appendChild(b);
+                          }
+                        }
+                      }).catch(function(e){});
+                  }catch(err){}
+                }, 1500);
+              })();
+              """
+
+              if len(data) > 40000 and "amarUpdateBox" not in data:
+                  data = data + "\n" + update_addon
                   modified = True
 
               if modified:
                   with open(jf, "w", encoding="utf-8") as f:
                       f.write(data)
-                  print(f"Patched JS bundle: {jf}")
+                  print("Patched JS: " + jf)
 
-          # B. Inject pure CSS in index.html to permanently hide Report button
+          # B. Hide Report Button via simple CSS
           for hf in target_html:
               with open(hf, "r", encoding="utf-8") as f:
                   html_data = f.read()
-              css_injection = "<style>button:has-text(\"Report Actual Bus Time\"), [onclick*=\"Report\"], .report-btn { display: none !important; }</style>"
+              css_rule = "<style>button:has-text(\"Report Actual Bus Time\"), [onclick*=\"Report\"], .report-btn { display: none !important; }</style>"
               if "</head>" in html_data and "report-btn" not in html_data:
-                  html_data = html_data.replace("</head>", css_injection + "\n</head>")
+                  html_data = html_data.replace("</head>", css_rule + "\n</head>")
                   with open(hf, "w", encoding="utf-8") as f:
                       f.write(html_data)
-                  print("CSS applied into index.html cleanly")
+                  print("Patched HTML: " + hf)
           '
 
           cd android
@@ -108,7 +111,7 @@ jobs:
           # 3. Setup Gradle Wrapper using pre-installed Gradle
           gradle wrapper --gradle-version 8.4 --distribution-type bin
 
-          # 4. Custom App Icon setup
+          # 4. Custom App Icon setup (if provided)
           ICON_FILE=""
           if [ -f "../app_icon.png" ]; then
             ICON_FILE="../app_icon.png"
@@ -137,7 +140,7 @@ jobs:
             rm -rf app/src/main/res/mipmap-anydpi-v26
           fi
 
-          # 5. Build execution
+          # 5. Build execution using original repo setup
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
