@@ -25,7 +25,7 @@ jobs:
 
           # 1. Direct Patch into HTML (Report hide, UPI dynamic, #admin block, Update alert)
           python3 -c '
-          import os, glob
+          import os
           target = "android/app/src/main/assets/dist/index.html"
           if os.path.exists(target):
               with open(target, "r", encoding="utf-8") as f:
@@ -125,7 +125,14 @@ jobs:
 
           cd android
 
-          # 2. Resource folders setup
+          # 2. Fix Missing gradle-wrapper.jar
+          mkdir -p gradle/wrapper
+          if [ ! -f "gradle/wrapper/gradle-wrapper.jar" ]; then
+            echo "Downloading missing gradle-wrapper.jar..."
+            curl -sLo gradle/wrapper/gradle-wrapper.jar https://raw.githubusercontent.com/gradle/gradle/v8.4.0/gradle/wrapper/gradle-wrapper.jar
+          fi
+
+          # 3. Resource folders setup
           mkdir -p app/src/main/res/mipmap-hdpi
           mkdir -p app/src/main/res/mipmap-mdpi
           mkdir -p app/src/main/res/mipmap-xhdpi
@@ -133,7 +140,7 @@ jobs:
           mkdir -p app/src/main/res/mipmap-xxxhdpi
           mkdir -p app/src/main/res/drawable
 
-          # 3. Custom App Icon setup
+          # 4. Custom App Icon setup
           ICON_FILE=""
           if [ -f "../app_icon.png" ]; then
             ICON_FILE="../app_icon.png"
@@ -177,7 +184,7 @@ jobs:
             cp app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
           fi
 
-          # 4. AndroidManifest with Permissions
+          # 5. AndroidManifest with Permissions
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -212,7 +219,7 @@ jobs:
           </manifest>
           EOF
 
-          # 5. Native MainActivity (GA4 Tracking & Stable WebView)
+          # 6. Native MainActivity (GA4 Analytics + Webview)
           mkdir -p app/src/main/java/com/amarbus/app
           cat << 'EOF' > app/src/main/java/com/amarbus/app/MainActivity.kt
           package com.amarbus.app
@@ -386,7 +393,7 @@ jobs:
           }
           EOF
 
-          # 6. Build execution (Using repo gradlew wrapper)
+          # 7. Build execution
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
