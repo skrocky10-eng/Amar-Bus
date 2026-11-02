@@ -29,46 +29,93 @@ jobs:
           echo "Extracting project from: $ZIP_NAME"
           unzip -o "$ZIP_NAME"
 
-          # 1. Fetch live UPI & Update config from version.json
+          # 1. Fetch live UPI from version.json
           NEW_UPI=$(curl -s "https://raw.githubusercontent.com/skrocky10-eng/Amar-Bus/main/version.json?t=$(date +%s)" | grep -o '"upiId": *"[^"]*"' | cut -d'"' -f4)
           if [ -z "$NEW_UPI" ]; then
             NEW_UPI="amarbus@upi"
           fi
-          echo "Setting UPI ID to: $NEW_UPI"
+          echo "Active UPI ID: $NEW_UPI"
 
-          # 2. Patch Web Assets Directly (Zero Blank Screen Risk)
+          # 2. Patch Web Assets Directly
           python3 -c '
           import os, glob
 
-          # A. Replace #admin and UPI in compiled JS bundle
           js_files = glob.glob("android/app/src/main/assets/dist/assets/*.js")
           new_upi = "'"$NEW_UPI"'"
+
           for jf in js_files:
               with open(jf, "r", encoding="utf-8", errors="ignore") as f:
                   data = f.read()
               mod = False
+
+              # A. Permanently lock admin access trigger
               if "#admin" in data:
-                  data = data.replace("#admin", "#disabled_admin")
+                  data = data.replace("\"#admin\"", "\"__BLOCKED_ADMIN_PANEL_KEY__\"")
+                  data = data.replace("\x27#admin\x27", "\x27__BLOCKED_ADMIN_PANEL_KEY__\x27")
+                  data = data.replace("#admin", "__BLOCKED_ADMIN_PANEL_KEY__")
                   mod = True
+
+              # B. Replace hardcoded UPI
               if "amarbus@upi" in data and new_upi:
                   data = data.replace("amarbus@upi", new_upi)
                   mod = True
+
               if mod:
                   with open(jf, "w", encoding="utf-8") as f:
                       f.write(data)
-                  print("Patched JS bundle:", jf)
+                  print("Patched JS bundle successfully:", jf)
 
-          # B. Inject Clean CSS to completely hide Report Button
+          # C. Inject foolproof CSS & DOM Observers into HTML
           html_files = glob.glob("android/app/src/main/assets/dist/index.html")
           for hf in html_files:
               with open(hf, "r", encoding="utf-8") as f:
                   html = f.read()
-              hide_css = "<style>button:has-text(\"Report Actual Bus Time\"), [onclick*=\"Report\"], .report-btn, div[class*=\"report\"] { display: none !important; }</style>"
-              if "</head>" in html and "report-btn" not in html:
-                  html = html.replace("</head>", hide_css + "\n</head>")
+
+              hide_patch = """
+              <style>
+                button:has-text("Report Actual Bus Time"),
+                button:has-text("Report"),
+                [onclick*="Report"],
+                .report-btn,
+                [data-report-btn] {
+                  display: none !important;
+                  visibility: hidden !important;
+                  height: 0 !important;
+                  padding: 0 !important;
+                  margin: 0 !important;
+                }
+              </style>
+              <script>
+                (function() {
+                  function killReport() {
+                    var els = document.querySelectorAll("button, a, div");
+                    for (var i = 0; i < els.length; i++) {
+                      var t = els[i].innerText;
+                      if (t && t.indexOf("Report Actual Bus Time") !== -1) {
+                        var p = els[i];
+                        while (p && p.tagName !== "BUTTON" && p.parentElement && p.parentElement !== document.body) {
+                          if (p.tagName === "BUTTON") break;
+                          p = p.parentElement;
+                        }
+                        if (p) {
+                          p.style.setProperty("display", "none", "important");
+                        }
+                      }
+                    }
+                  }
+                  document.addEventListener("DOMContentLoaded", killReport);
+                  var observer = new MutationObserver(killReport);
+                  observer.observe(document.documentElement, { childList: true, subtree: true });
+                  setInterval(killReport, 300);
+                })();
+              </script>
+              """
+
+              if "</head>" in html:
+                  html = html.replace("</head>", hide_patch + "\n</head>")
                   with open(hf, "w", encoding="utf-8") as f:
                       f.write(html)
-                  print("Injected CSS into HTML cleanly")
+                  print("Patched index.html cleanly")
           '
 
           cd android
@@ -163,7 +210,7 @@ jobs:
           </manifest>
           EOF
 
-          # 7. MainActivity with GA4 Tracking, Zero Blank Screen & Native Update Dialog
+          # 7. MainActivity (Stable WebView + GA4 Tracking + Native Remote Update Check)
           mkdir -p app/src/main/java/com/amarbus/app
           cat << 'EOF' > app/src/main/java/com/amarbus/app/MainActivity.kt
           package com.amarbus.app
@@ -266,7 +313,6 @@ jobs:
                       }
                   }
 
-                  // Load local bundled web application
                   webView.loadUrl("file:///android_asset/dist/index.html")
               }
 
