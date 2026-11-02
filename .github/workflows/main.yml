@@ -23,7 +23,7 @@ jobs:
           unzip -o "$ZIP_NAME"
           cd android
 
-          # 1. Resource folders banayein
+          # 1. Folders banayein
           mkdir -p app/src/main/res/mipmap-hdpi
           mkdir -p app/src/main/res/mipmap-mdpi
           mkdir -p app/src/main/res/mipmap-xhdpi
@@ -31,18 +31,15 @@ jobs:
           mkdir -p app/src/main/res/mipmap-xxxhdpi
           mkdir -p app/src/main/res/drawable
 
-          # 2. Check karein agar user ne app_icon.png upload kiya hai
+          # 2. Icon setup (app_icon.png agar uploaded ho)
           ICON_FILE=""
           if [ -f "../app_icon.png" ]; then
             ICON_FILE="../app_icon.png"
           elif [ -f "../app_icon.jpg" ]; then
             ICON_FILE="../app_icon.jpg"
-          elif [ -f "../app_icon.jpeg" ]; then
-            ICON_FILE="../app_icon.jpeg"
           fi
 
           if [ -n "$ICON_FILE" ]; then
-            echo "Custom icon found: $ICON_FILE"
             cp "$ICON_FILE" app/src/main/res/mipmap-hdpi/ic_launcher.png
             cp "$ICON_FILE" app/src/main/res/mipmap-mdpi/ic_launcher.png
             cp "$ICON_FILE" app/src/main/res/mipmap-xhdpi/ic_launcher.png
@@ -54,11 +51,8 @@ jobs:
             cp "$ICON_FILE" app/src/main/res/mipmap-xhdpi/ic_launcher_round.png
             cp "$ICON_FILE" app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png
             cp "$ICON_FILE" app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
-            
-            # Purana adaptive XML hata dein taaki direct aapka PNG logo use ho
             rm -rf app/src/main/res/mipmap-anydpi-v26
           else
-            echo "No custom icon uploaded. Creating fallback icon..."
             mkdir -p app/src/main/res/mipmap-anydpi-v26
             cat << 'EOF' > app/src/main/res/drawable/ic_launcher_background.xml
           <?xml version="1.0" encoding="utf-8"?>
@@ -81,13 +75,17 @@ jobs:
             cp app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
           fi
 
-          # 3. Clean AndroidManifest setup
+          # 3. AndroidManifest with Mic & Location permissions (Fixes Mic Denied Error)
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+              <uses-permission android:name="android.permission.RECORD_AUDIO" />
+              <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+              <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
               <application
                   android:allowBackup="true"
@@ -112,28 +110,40 @@ jobs:
           </manifest>
           EOF
 
-          # 4. MainActivity Setup
+          # 4. MainActivity with Native Intent & Permission Support (Fixes Maps & Mic)
           mkdir -p app/src/main/java/com/amarbus/app
           cat << 'EOF' > app/src/main/java/com/amarbus/app/MainActivity.kt
           package com.amarbus.app
 
+          import android.Manifest
           import android.annotation.SuppressLint
+          import android.content.Intent
+          import android.content.pm.PackageManager
+          import android.net.Uri
+          import android.os.Build
           import android.os.Bundle
           import android.view.View
+          import android.webkit.PermissionRequest
           import android.webkit.WebChromeClient
           import android.webkit.WebSettings
           import android.webkit.WebView
           import android.webkit.WebViewClient
           import androidx.activity.ComponentActivity
+          import androidx.core.app.ActivityCompat
+          import androidx.core.content.ContextCompat
 
           class MainActivity : ComponentActivity() {
               private lateinit var webView: WebView
+              private val PERMISSION_REQUEST_CODE = 1001
 
               @SuppressLint("SetJavaScriptEnabled")
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
                   webView = WebView(this)
                   setContentView(webView)
+
+                  // Mic & Location permission check
+                  checkPermissions()
 
                   webView.settings.apply {
                       javaScriptEnabled = true
@@ -147,19 +157,65 @@ jobs:
                       mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                       useWideViewPort = true
                       loadWithOverviewMode = true
+                      mediaPlaybackRequiresUserGesture = false
                   }
 
                   webView.scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
-                  webView.webChromeClient = WebChromeClient()
 
+                  // Fix for Microphone access inside Web app
+                  webView.webChromeClient = object : WebChromeClient() {
+                      override fun onPermissionRequest(request: PermissionRequest?) {
+                          request?.grant(request.resources)
+                      }
+                  }
+
+                  // Fix for Google Maps & External links (Fixes ERR_UNKNOWN_URL_SCHEME)
                   webView.webViewClient = object : WebViewClient() {
                       override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
-                          url?.let { view?.loadUrl(it) }
+                          if (url == null) return false
+
+                          // Agar link intent://, google maps, ya bahar ka hai
+                          if (url.startsWith("intent://") || url.startsWith("https://www.google.com/maps") || url.startsWith("https://maps.google.com")) {
+                              try {
+                                  val intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
+                                  if (intent != null) {
+                                      view?.context?.startActivity(intent)
+                                      return true
+                                  }
+                              } catch (e: Exception) {
+                                  // Agar Maps app na ho to browser me open karein
+                                  try {
+                                      val fallbackUrl = url.replace("intent://", "https://")
+                                      val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(fallbackUrl))
+                                      view?.context?.startActivity(browserIntent)
+                                      return true
+                                  } catch (ignored: Exception) {}
+                              }
+                          } else if (url.startsWith("tel:") || url.startsWith("mailto:") || url.startsWith("geo:")) {
+                              val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                              view?.context?.startActivity(intent)
+                              return true
+                          }
+
+                          url.let { view?.loadUrl(it) }
                           return true
                       }
                   }
 
                   webView.loadUrl("file:///android_asset/dist/index.html")
+              }
+
+              private fun checkPermissions() {
+                  val permissionsNeeded = mutableListOf<String>()
+                  if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                      permissionsNeeded.add(Manifest.permission.RECORD_AUDIO)
+                  }
+                  if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                      permissionsNeeded.add(Manifest.permission.ACCESS_FINE_LOCATION)
+                  }
+                  if (permissionsNeeded.isNotEmpty()) {
+                      ActivityCompat.requestPermissions(this, permissionsNeeded.toTypedArray(), PERMISSION_REQUEST_CODE)
+                  }
               }
 
               @Deprecated("Deprecated in Java")
