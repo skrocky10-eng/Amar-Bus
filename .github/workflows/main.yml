@@ -23,14 +23,26 @@ jobs:
           unzip -o "$ZIP_NAME"
           cd android
 
-          # 1. Google Analytics Injection (Measurement ID: G-MDS74ENQJE)
+          # 1. Clean Google Analytics Injection
           GA_ID="G-MDS74ENQJE"
-          GA_SCRIPT="<script async src='https://www.googletagmanager.com/gtag/js?id=${GA_ID}'></script><script>window.dataLayer = window.dataLayer || []; function gtag(){dataLayer.push(arguments);} gtag('js', new Date()); gtag('config', '${GA_ID}');</script>"
-
-          if [ -f app/src/main/assets/dist/index.html ]; then
-            sed -i "s|<head>|<head>${GA_SCRIPT}|g" app/src/main/assets/dist/index.html
-            echo "Google Analytics (G-MDS74ENQJE) successfully injected!"
-          fi
+          python3 -c "
+          html_path = 'app/src/main/assets/dist/index.html'
+          try:
+              with open(html_path, 'r', encoding='utf-8') as f:
+                  content = f.read()
+              
+              ga_code = '''<script async src=\"https://www.googletagmanager.com/gtag/js?id=${GA_ID}\"></script><script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','${GA_ID}');</script>'''
+              
+              if '<head>' in content:
+                  content = content.replace('<head>', '<head>' + ga_code, 1)
+                  with open(html_path, 'w', encoding='utf-8') as f:
+                      f.write(content)
+                  print('Google Analytics successfully added to index.html')
+              else:
+                  print('Warning: <head> tag not found')
+          except Exception as e:
+              print(f'Analytics injection skipped: {e}')
+          "
 
           # 2. Resource folders setup
           mkdir -p app/src/main/res/mipmap-hdpi
