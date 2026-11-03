@@ -58,7 +58,6 @@ jobs:
                   data = data.replace("amarbus@upi", new_upi)
                   mod = True
 
-              # Strip all variants of Report button text
               report_texts = [
                   "Report Actual Bus Time at a Stop",
                   "Report Actual Bus Time",
@@ -192,7 +191,7 @@ jobs:
           </manifest>
           EOF
 
-          # 7. Stable MainActivity with Realtime GA4 & Safe UI Rendering
+          # 7. Stable MainActivity with 100% Compliant GA4 Measurement Protocol
           mkdir -p app/src/main/java/com/amarbus/app
           cat << 'EOF' > app/src/main/java/com/amarbus/app/MainActivity.kt
           package com.amarbus.app
