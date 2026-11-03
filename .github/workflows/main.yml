@@ -36,11 +36,11 @@ jobs:
           fi
           echo "Active UPI ID: $NEW_UPI"
 
-          # 2. Patch Assets (JS ko bina chhede clean CSS hide rule)
+          # 2. Patch Assets (JS safe, clean CSS hide rule)
           python3 -c '
           import os, glob
 
-          # A. Block #admin and replace UPI directly inside JS bundles
+          # Block admin and update UPI in JS
           js_files = glob.glob("android/app/src/main/assets/dist/assets/*.js")
           new_upi = "'"$NEW_UPI"'"
           for jf in js_files:
@@ -61,9 +61,8 @@ jobs:
               if mod:
                   with open(jf, "w", encoding="utf-8") as f:
                       f.write(data)
-                  print("Patched JS bundle cleanly:", jf)
 
-          # B. Append hide rule to CSS bundles
+          # CSS Hide rule
           css_files = glob.glob("android/app/src/main/assets/dist/assets/*.css")
           hide_css = """
           button:has-text("Report Actual Bus Time"),
@@ -83,85 +82,49 @@ jobs:
           for cf in css_files:
               with open(cf, "a", encoding="utf-8") as f:
                   f.write("\n" + hide_css + "\n")
-              print("Appended clean hide rule into CSS bundle:", cf)
           '
 
           cd android
 
-          # 3. Setup google-services.json for Firebase
+          # 3. Attach google-services.json
           if [ -f "../google-services.json" ]; then
             cp "../google-services.json" app/google-services.json
-            echo "Successfully attached google-services.json"
+            echo "google-services.json attached successfully"
           fi
 
-          # 4. Integrate Firebase Analytics in build.gradle
-          # Root build.gradle
-          cat << 'EOF' > build.gradle
-          buildscript {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-              dependencies {
-                  classpath 'com.android.tools.build:gradle:8.2.0'
-                  classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22'
-                  classpath 'com.google.gms:google-services:4.4.1'
-              }
-          }
-          allprojects {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
-          EOF
+          # 4. Patch Gradle cleanly (Without breaking repository mode)
+          # Root buildscript classpath injection
+          python3 -c '
+          with open("build.gradle", "r") as f:
+              content = f.read()
+          if "com.google.gms:google-services" not in content:
+              content = "buildscript {\n    dependencies {\n        classpath \"com.google.gms:google-services:4.4.1\"\n    }\n}\n" + content
+              with open("build.gradle", "w") as f:
+                  f.write(content)
+          '
 
-          # App build.gradle
-          cat << 'EOF' > app/build.gradle
-          plugins {
-              id 'com.android.application'
-              id 'org.jetbrains.kotlin.android'
-              id 'com.google.gms.google-services'
-          }
+          # App build.gradle plugin and dependency injection
+          python3 -c '
+          with open("app/build.gradle", "r") as f:
+              content = f.read()
 
-          android {
-              namespace 'com.amarbus.app'
-              compileSdk 34
+          if "com.google.gms.google-services" not in content:
+              if "plugins {" in content:
+                  content = content.replace("plugins {", "plugins {\n    id \"com.google.gms.google-services\"")
+              else:
+                  content = "apply plugin: \"com.google.gms.google-services\"\n" + content
 
-              defaultConfig {
-                  applicationId "com.amarbus.app"
-                  minSdk 24
-                  targetSdk 34
-                  versionCode 1
-                  versionName "1.0"
-              }
-
-              buildTypes {
-                  release {
-                      minifyEnabled false
-                      proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-                  }
-                  debug {
-                      applicationIdSuffix ""
-                  }
-              }
-
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_17
-                  targetCompatibility JavaVersion.VERSION_17
-              }
-              kotlinOptions {
-                  jvmTarget = '17'
-              }
-          }
-
+          if "firebase-analytics" not in content:
+              dep_str = """
           dependencies {
-              implementation platform('com.google.firebase:firebase-bom:32.8.0')
-              implementation 'com.google.firebase:firebase-analytics'
-              implementation 'androidx.core:core-ktx:1.12.0'
-              implementation 'androidx.activity:activity-ktx:1.8.2'
-          }
-          EOF
+              implementation platform(\x27com.google.firebase:firebase-bom:32.8.0\x27)
+              implementation \x27com.google.firebase:firebase-analytics\x27
+          """
+              content = content.replace("dependencies {", dep_str)
+
+          with open("app/build.gradle", "w") as f:
+              f.write(content)
+          '
 
           # 5. Setup Gradle Wrapper
           gradle wrapper --gradle-version 8.4 --distribution-type bin
@@ -218,7 +181,7 @@ jobs:
             cp app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
           fi
 
-          # 8. AndroidManifest with Permissions
+          # 8. AndroidManifest
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -253,7 +216,7 @@ jobs:
           </manifest>
           EOF
 
-          # 9. MainActivity with Official Firebase SDK Integration
+          # 9. MainActivity with Firebase
           mkdir -p app/src/main/java/com/amarbus/app
           cat << 'EOF' > app/src/main/java/com/amarbus/app/MainActivity.kt
           package com.amarbus.app
@@ -291,12 +254,13 @@ jobs:
                   webView = WebView(this)
                   setContentView(webView)
 
-                  // Official Firebase Init & App Open Event
-                  firebaseAnalytics = FirebaseAnalytics.getInstance(this)
-                  val bundle = Bundle().apply {
-                      putString("screen_name", "MainMapScreen")
-                  }
-                  firebaseAnalytics.logEvent(FirebaseAnalytics.Event.APP_OPEN, bundle)
+                  try {
+                      firebaseAnalytics = FirebaseAnalytics.getInstance(this)
+                      val bundle = Bundle().apply {
+                          putString("screen_name", "MainMapScreen")
+                      }
+                      firebaseAnalytics.logEvent(FirebaseAnalytics.Event.APP_OPEN, bundle)
+                  } catch (ignored: Exception) {}
 
                   checkRemoteUpdate()
                   checkPermissions()
