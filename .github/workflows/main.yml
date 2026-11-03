@@ -22,7 +22,7 @@ jobs:
           gradle-version: '8.4'
           cache-disabled: true
 
-      - name: Setup Resources, Analytics and Build APK
+      - name: Setup Resources, Clean Patch and Build APK
         run: |
           set -e
           ZIP_NAME=$(ls *.zip | head -n 1)
@@ -36,11 +36,11 @@ jobs:
           fi
           echo "Active UPI ID: $NEW_UPI"
 
-          # 2. Patch Assets (Zero HTML/JS Injection = Zero Blank Screen)
+          # 2. Comprehensive Patching (JS Bundles + CSS)
           python3 -c '
           import os, glob
 
-          # A. Block #admin and replace UPI directly inside JS bundles
+          # A. Strip Report Text, Lock Admin & Update UPI in all JS chunks
           js_files = glob.glob("android/app/src/main/assets/dist/assets/*.js")
           new_upi = "'"$NEW_UPI"'"
           for jf in js_files:
@@ -48,30 +48,56 @@ jobs:
                   data = f.read()
               mod = False
 
-              # Block admin prompt completely
               if "#admin" in data:
-                  data = data.replace("\"#admin\"", "\"__BLOCKED_ADMIN_PANEL_KEY__\"")
-                  data = data.replace("\x27#admin\x27", "\x27__BLOCKED_ADMIN_PANEL_KEY__\x27")
-                  data = data.replace("#admin", "__BLOCKED_ADMIN_PANEL_KEY__")
+                  data = data.replace("\"#admin\"", "\"__PERMANENTLY_BLOCKED_ADMIN__\"")
+                  data = data.replace("\x27#admin\x27", "\x27__PERMANENTLY_BLOCKED_ADMIN__\x27")
+                  data = data.replace("#admin", "__PERMANENTLY_BLOCKED_ADMIN__")
                   mod = True
 
-              # Update UPI ID
               if "amarbus@upi" in data and new_upi:
                   data = data.replace("amarbus@upi", new_upi)
                   mod = True
+
+              # Strip all variants of Report button text
+              report_texts = [
+                  "Report Actual Bus Time at a Stop",
+                  "Report Actual Bus Time",
+                  "Report Bus Time"
+              ]
+              for rt in report_texts:
+                  if rt in data:
+                      data = data.replace(rt, "")
+                      mod = True
 
               if mod:
                   with open(jf, "w", encoding="utf-8") as f:
                       f.write(data)
                   print("Patched JS bundle cleanly:", jf)
 
-          # B. Append hide rule directly to compiled CSS file (No HTML modification)
+          # B. Append absolute CSS rules to ALL css bundles
           css_files = glob.glob("android/app/src/main/assets/dist/assets/*.css")
-          hide_css = "\nbutton:has-text(\"Report Actual Bus Time\"), [onclick*=\"Report\"], .report-btn, div:has(> button:has-text(\"Report\")) { display: none !important; visibility: hidden !important; height: 0 !important; margin: 0 !important; padding: 0 !important; }\n"
+          hide_css = """
+          button:empty,
+          a:empty,
+          button:has-text("Report"),
+          button:has(svg + span:empty),
+          [class*="report"],
+          [id*="report"],
+          div:has(> button:empty) {
+              display: none !important;
+              visibility: hidden !important;
+              height: 0px !important;
+              max-height: 0px !important;
+              margin: 0px !important;
+              padding: 0px !important;
+              pointer-events: none !important;
+              overflow: hidden !important;
+          }
+          """
           for cf in css_files:
               with open(cf, "a", encoding="utf-8") as f:
-                  f.write(hide_css)
-              print("Appended clean hide rule into CSS bundle:", cf)
+                  f.write("\n" + hide_css + "\n")
+              print("Appended clean CSS hide rules to:", cf)
           '
 
           cd android
@@ -87,7 +113,7 @@ jobs:
           mkdir -p app/src/main/res/mipmap-xxxhdpi
           mkdir -p app/src/main/res/drawable
 
-          # 5. Custom App Icon setup
+          # 5. App Icon Setup
           ICON_FILE=""
           if [ -f "../app_icon.png" ]; then
             ICON_FILE="../app_icon.png"
@@ -131,7 +157,7 @@ jobs:
             cp app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
           fi
 
-          # 6. AndroidManifest with Permissions
+          # 6. AndroidManifest
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -166,7 +192,7 @@ jobs:
           </manifest>
           EOF
 
-          # 7. Stable MainActivity (Unmodified WebView client, pure loading)
+          # 7. Stable MainActivity with Realtime GA4 & Safe UI Rendering
           mkdir -p app/src/main/java/com/amarbus/app
           cat << 'EOF' > app/src/main/java/com/amarbus/app/MainActivity.kt
           package com.amarbus.app
@@ -208,10 +234,8 @@ jobs:
                   webView = WebView(this)
                   setContentView(webView)
 
-                  sendAnalyticsHit("app_open")
-                  sendAnalyticsHit("page_view")
+                  sendAnalyticsHit()
                   checkRemoteUpdate()
-
                   checkPermissions()
 
                   webView.settings.apply {
@@ -318,10 +342,11 @@ jobs:
                   return clientId
               }
 
-              private fun sendAnalyticsHit(eventName: String) {
+              private fun sendAnalyticsHit() {
                   thread {
                       try {
                           val clientId = getOrCreateClientId()
+                          val sessionId = System.currentTimeMillis() / 1000
                           val endpoint = "https://www.google-analytics.com/mp/collect?measurement_id=$GA_MEASUREMENT_ID&api_secret=$GA_API_SECRET"
                           val url = URL(endpoint)
                           val conn = url.openConnection() as HttpURLConnection
@@ -336,10 +361,19 @@ jobs:
                             "client_id": "$clientId",
                             "events": [
                               {
-                                "name": "$eventName",
+                                "name": "page_view",
                                 "params": {
-                                  "engagement_time_msec": 100,
-                                  "session_id": "1"
+                                  "session_id": $sessionId,
+                                  "page_location": "https://amarbus.app/",
+                                  "page_title": "Amar Bus App",
+                                  "engagement_time_msec": 1500
+                                }
+                              },
+                              {
+                                "name": "user_engagement",
+                                "params": {
+                                  "session_id": $sessionId,
+                                  "engagement_time_msec": 1500
                                 }
                               }
                             ]
