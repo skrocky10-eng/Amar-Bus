@@ -92,38 +92,50 @@ jobs:
             echo "google-services.json attached successfully"
           fi
 
-          # 4. Patch Gradle cleanly (Without breaking repository mode)
-          # Root buildscript classpath injection
+          # 4. Patch Gradle cleanly (Detect .kts or Groovy)
           python3 -c '
-          with open("build.gradle", "r") as f:
-              content = f.read()
-          if "com.google.gms:google-services" not in content:
-              content = "buildscript {\n    dependencies {\n        classpath \"com.google.gms:google-services:4.4.1\"\n    }\n}\n" + content
-              with open("build.gradle", "w") as f:
+          import os
+
+          # Root build file patch
+          root_file = "build.gradle.kts" if os.path.exists("build.gradle.kts") else "build.gradle"
+          if os.path.exists(root_file):
+              with open(root_file, "r") as f:
+                  content = f.read()
+              if "com.google.gms:google-services" not in content and "com.google.gms.google-services" not in content:
+                  if "plugins {" in content:
+                      content = content.replace("plugins {", "plugins {\n    id(\"com.google.gms.google-services\") version \"4.4.1\" apply false")
+                  else:
+                      content = "buildscript {\n    dependencies {\n        classpath(\"com.google.gms:google-services:4.4.1\")\n    }\n}\n" + content
+                  with open(root_file, "w") as f:
+                      f.write(content)
+                  print("Patched root:", root_file)
+
+          # App build file patch
+          app_file = "app/build.gradle.kts" if os.path.exists("app/build.gradle.kts") else "app/build.gradle"
+          if os.path.exists(app_file):
+              with open(app_file, "r") as f:
+                  content = f.read()
+
+              # Add plugin
+              if "com.google.gms.google-services" not in content:
+                  if "plugins {" in content:
+                      if "kts" in app_file:
+                          content = content.replace("plugins {", "plugins {\n    id(\"com.google.gms.google-services\")")
+                      else:
+                          content = content.replace("plugins {", "plugins {\n    id \"com.google.gms.google-services\"")
+
+              # Add dependencies
+              if "firebase-analytics" not in content:
+                  if "dependencies {" in content:
+                      if "kts" in app_file:
+                          dep_block = "dependencies {\n    implementation(platform(\"com.google.firebase:firebase-bom:32.8.0\"))\n    implementation(\"com.google.firebase:firebase-analytics\")"
+                      else:
+                          dep_block = "dependencies {\n    implementation platform(\x27com.google.firebase:firebase-bom:32.8.0\x27)\n    implementation \x27com.google.firebase:firebase-analytics\x27"
+                      content = content.replace("dependencies {", dep_block)
+
+              with open(app_file, "w") as f:
                   f.write(content)
-          '
-
-          # App build.gradle plugin and dependency injection
-          python3 -c '
-          with open("app/build.gradle", "r") as f:
-              content = f.read()
-
-          if "com.google.gms.google-services" not in content:
-              if "plugins {" in content:
-                  content = content.replace("plugins {", "plugins {\n    id \"com.google.gms.google-services\"")
-              else:
-                  content = "apply plugin: \"com.google.gms.google-services\"\n" + content
-
-          if "firebase-analytics" not in content:
-              dep_str = """
-          dependencies {
-              implementation platform(\x27com.google.firebase:firebase-bom:32.8.0\x27)
-              implementation \x27com.google.firebase:firebase-analytics\x27
-          """
-              content = content.replace("dependencies {", dep_str)
-
-          with open("app/build.gradle", "w") as f:
-              f.write(content)
+              print("Patched app:", app_file)
           '
 
           # 5. Setup Gradle Wrapper
@@ -297,100 +309,5 @@ jobs:
                           if (url.startsWith("intent://") || url.startsWith("https://www.google.com/maps") || url.startsWith("https://maps.google.com")) {
                               try {
                                   val intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
-                                  if (intent != null) {
-                                      view?.context?.startActivity(intent)
-                                      return true
-                                  }
-                              } catch (e: Exception) {
-                                  try {
-                                      val fallbackUrl = url.replace("intent://", "https://")
-                                      val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(fallbackUrl))
-                                      view?.context?.startActivity(browserIntent)
-                                      return true
-                                  } catch (ignored: Exception) {}
-                              }
-                          } else if (url.startsWith("tel:") || url.startsWith("mailto:") || url.startsWith("geo:") || url.startsWith("upi:")) {
-                              val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                              view?.context?.startActivity(intent)
-                              return true
-                          }
 
-                          url.let { view?.loadUrl(it) }
-                          return true
-                      }
-                  }
-
-                  webView.loadUrl("file:///android_asset/dist/index.html")
-              }
-
-              private fun checkRemoteUpdate() {
-                  thread {
-                      try {
-                          val endpoint = "https://raw.githubusercontent.com/skrocky10-eng/Amar-Bus/main/version.json?t=" + System.currentTimeMillis()
-                          val url = URL(endpoint)
-                          val conn = url.openConnection() as HttpURLConnection
-                          conn.connectTimeout = 4000
-                          conn.readTimeout = 4000
-                          val resp = conn.inputStream.bufferedReader().use { it.readText() }
-                          val json = JSONObject(resp)
-
-                          val hasUpdate = json.optBoolean("hasUpdate", false)
-                          val latestVer = json.optInt("latestVersion", 1)
-                          val title = json.optString("title", "Update Available")
-                          val message = json.optString("message", "Amar Bus app ka naya version uplabdh hai.")
-                          val updateUrl = json.optString("updateUrl", "")
-
-                          if (hasUpdate && latestVer > 1 && updateUrl.isNotEmpty()) {
-                              runOnUiThread {
-                                  try {
-                                      AlertDialog.Builder(this)
-                                          .setTitle(title)
-                                          .setMessage(message)
-                                          .setCancelable(false)
-                                          .setPositiveButton("Update Now") { _, _ ->
-                                              val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(updateUrl))
-                                              startActivity(browserIntent)
-                                          }
-                                          .show()
-                                  } catch (ignored: Exception) {}
-                              }
-                          }
-                      } catch (ignored: Exception) {}
-                  }
-              }
-
-              private fun checkPermissions() {
-                  val permissionsNeeded = mutableListOf<String>()
-                  if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                      permissionsNeeded.add(Manifest.permission.RECORD_AUDIO)
-                  }
-                  if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-                      permissionsNeeded.add(Manifest.permission.ACCESS_FINE_LOCATION)
-                  }
-                  if (permissionsNeeded.isNotEmpty()) {
-                      ActivityCompat.requestPermissions(this, permissionsNeeded.toTypedArray(), PERMISSION_REQUEST_CODE)
-                  }
-              }
-
-              @Deprecated("Deprecated in Java")
-              override fun onBackPressed() {
-                  if (webView.canGoBack()) {
-                      webView.goBack()
-                      return
-                  }
-                  super.onBackPressed()
-              }
-          }
-          EOF
-
-          # 10. Compile APK
-          chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: amarbus-complete-apk
-          path: '**/build/outputs/apk/debug/*.apk'
-          
+                               
