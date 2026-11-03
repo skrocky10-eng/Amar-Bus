@@ -36,11 +36,11 @@ jobs:
           fi
           echo "Active UPI ID: $NEW_UPI"
 
-          # 2. Comprehensive Patching (JS Bundles + CSS)
+          # 2. Patch Assets (Kal wala 100% stable method: JS ko disturb kiye bina CSS se gayab)
           python3 -c '
           import os, glob
 
-          # A. Strip Report Text, Lock Admin & Update UPI in all JS chunks
+          # A. Block #admin and replace UPI directly inside JS bundles
           js_files = glob.glob("android/app/src/main/assets/dist/assets/*.js")
           new_upi = "'"$NEW_UPI"'"
           for jf in js_files:
@@ -48,55 +48,44 @@ jobs:
                   data = f.read()
               mod = False
 
+              # Block admin prompt completely
               if "#admin" in data:
-                  data = data.replace("\"#admin\"", "\"__PERMANENTLY_BLOCKED_ADMIN__\"")
-                  data = data.replace("\x27#admin\x27", "\x27__PERMANENTLY_BLOCKED_ADMIN__\x27")
-                  data = data.replace("#admin", "__PERMANENTLY_BLOCKED_ADMIN__")
+                  data = data.replace("\"#admin\"", "\"__BLOCKED_ADMIN_PANEL_KEY__\"")
+                  data = data.replace("\x27#admin\x27", "\x27__BLOCKED_ADMIN_PANEL_KEY__\x27")
+                  data = data.replace("#admin", "__BLOCKED_ADMIN_PANEL_KEY__")
                   mod = True
 
+              # Update UPI ID
               if "amarbus@upi" in data and new_upi:
                   data = data.replace("amarbus@upi", new_upi)
                   mod = True
-
-              report_texts = [
-                  "Report Actual Bus Time at a Stop",
-                  "Report Actual Bus Time",
-                  "Report Bus Time"
-              ]
-              for rt in report_texts:
-                  if rt in data:
-                      data = data.replace(rt, "")
-                      mod = True
 
               if mod:
                   with open(jf, "w", encoding="utf-8") as f:
                       f.write(data)
                   print("Patched JS bundle cleanly:", jf)
 
-          # B. Append absolute CSS rules to ALL css bundles
+          # B. Append strict hide rule to CSS bundles (Button + icon + container completely hidden)
           css_files = glob.glob("android/app/src/main/assets/dist/assets/*.css")
           hide_css = """
-          button:empty,
-          a:empty,
+          button:has-text("Report Actual Bus Time"),
           button:has-text("Report"),
-          button:has(svg + span:empty),
-          [class*="report"],
-          [id*="report"],
-          div:has(> button:empty) {
+          [onclick*="Report"],
+          .report-btn,
+          div:has(> button:has-text("Report")),
+          div:has(> button:has-text("Report Actual Bus Time")) {
               display: none !important;
               visibility: hidden !important;
-              height: 0px !important;
-              max-height: 0px !important;
-              margin: 0px !important;
-              padding: 0px !important;
+              height: 0 !important;
+              margin: 0 !important;
+              padding: 0 !important;
               pointer-events: none !important;
-              overflow: hidden !important;
           }
           """
           for cf in css_files:
               with open(cf, "a", encoding="utf-8") as f:
                   f.write("\n" + hide_css + "\n")
-              print("Appended clean CSS hide rules to:", cf)
+              print("Appended clean hide rule into CSS bundle:", cf)
           '
 
           cd android
@@ -112,7 +101,7 @@ jobs:
           mkdir -p app/src/main/res/mipmap-xxxhdpi
           mkdir -p app/src/main/res/drawable
 
-          # 5. App Icon Setup
+          # 5. Custom App Icon setup
           ICON_FILE=""
           if [ -f "../app_icon.png" ]; then
             ICON_FILE="../app_icon.png"
@@ -156,7 +145,7 @@ jobs:
             cp app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
           fi
 
-          # 6. AndroidManifest
+          # 6. AndroidManifest with Permissions
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -191,7 +180,7 @@ jobs:
           </manifest>
           EOF
 
-          # 7. Stable MainActivity with 100% Compliant GA4 Measurement Protocol
+          # 7. Stable MainActivity
           mkdir -p app/src/main/java/com/amarbus/app
           cat << 'EOF' > app/src/main/java/com/amarbus/app/MainActivity.kt
           package com.amarbus.app
