@@ -22,7 +22,7 @@ jobs:
           gradle-version: '8.4'
           cache-disabled: true
 
-      - name: Setup Resources, Clean Patch and Build APK
+      - name: Setup Resources, Clean Patch, Firebase and Build APK
         run: |
           set -e
           ZIP_NAME=$(ls *.zip | head -n 1)
@@ -36,7 +36,7 @@ jobs:
           fi
           echo "Active UPI ID: $NEW_UPI"
 
-          # 2. Patch Assets (Kal wala 100% stable method: JS ko disturb kiye bina CSS se gayab)
+          # 2. Patch Assets (JS ko bina chhede clean CSS hide rule)
           python3 -c '
           import os, glob
 
@@ -48,14 +48,12 @@ jobs:
                   data = f.read()
               mod = False
 
-              # Block admin prompt completely
               if "#admin" in data:
                   data = data.replace("\"#admin\"", "\"__BLOCKED_ADMIN_PANEL_KEY__\"")
                   data = data.replace("\x27#admin\x27", "\x27__BLOCKED_ADMIN_PANEL_KEY__\x27")
                   data = data.replace("#admin", "__BLOCKED_ADMIN_PANEL_KEY__")
                   mod = True
 
-              # Update UPI ID
               if "amarbus@upi" in data and new_upi:
                   data = data.replace("amarbus@upi", new_upi)
                   mod = True
@@ -65,7 +63,7 @@ jobs:
                       f.write(data)
                   print("Patched JS bundle cleanly:", jf)
 
-          # B. Append strict hide rule to CSS bundles (Button + icon + container completely hidden)
+          # B. Append hide rule to CSS bundles
           css_files = glob.glob("android/app/src/main/assets/dist/assets/*.css")
           hide_css = """
           button:has-text("Report Actual Bus Time"),
@@ -90,10 +88,85 @@ jobs:
 
           cd android
 
-          # 3. Setup Gradle Wrapper
+          # 3. Setup google-services.json for Firebase
+          if [ -f "../google-services.json" ]; then
+            cp "../google-services.json" app/google-services.json
+            echo "Successfully attached google-services.json"
+          fi
+
+          # 4. Integrate Firebase Analytics in build.gradle
+          # Root build.gradle
+          cat << 'EOF' > build.gradle
+          buildscript {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:8.2.0'
+                  classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22'
+                  classpath 'com.google.gms:google-services:4.4.1'
+              }
+          }
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          EOF
+
+          # App build.gradle
+          cat << 'EOF' > app/build.gradle
+          plugins {
+              id 'com.android.application'
+              id 'org.jetbrains.kotlin.android'
+              id 'com.google.gms.google-services'
+          }
+
+          android {
+              namespace 'com.amarbus.app'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId "com.amarbus.app"
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+
+              buildTypes {
+                  release {
+                      minifyEnabled false
+                      proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+                  }
+                  debug {
+                      applicationIdSuffix ""
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = '17'
+              }
+          }
+
+          dependencies {
+              implementation platform('com.google.firebase:firebase-bom:32.8.0')
+              implementation 'com.google.firebase:firebase-analytics'
+              implementation 'androidx.core:core-ktx:1.12.0'
+              implementation 'androidx.activity:activity-ktx:1.8.2'
+          }
+          EOF
+
+          # 5. Setup Gradle Wrapper
           gradle wrapper --gradle-version 8.4 --distribution-type bin
 
-          # 4. Resource folders setup
+          # 6. Resource folders setup
           mkdir -p app/src/main/res/mipmap-hdpi
           mkdir -p app/src/main/res/mipmap-mdpi
           mkdir -p app/src/main/res/mipmap-xhdpi
@@ -101,7 +174,7 @@ jobs:
           mkdir -p app/src/main/res/mipmap-xxxhdpi
           mkdir -p app/src/main/res/drawable
 
-          # 5. Custom App Icon setup
+          # 7. Custom App Icon setup
           ICON_FILE=""
           if [ -f "../app_icon.png" ]; then
             ICON_FILE="../app_icon.png"
@@ -145,7 +218,7 @@ jobs:
             cp app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
           fi
 
-          # 6. AndroidManifest with Permissions
+          # 8. AndroidManifest with Permissions
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -180,7 +253,7 @@ jobs:
           </manifest>
           EOF
 
-          # 7. Stable MainActivity
+          # 9. MainActivity with Official Firebase SDK Integration
           mkdir -p app/src/main/java/com/amarbus/app
           cat << 'EOF' > app/src/main/java/com/amarbus/app/MainActivity.kt
           package com.amarbus.app
@@ -188,7 +261,6 @@ jobs:
           import android.Manifest
           import android.annotation.SuppressLint
           import android.app.AlertDialog
-          import android.content.Context
           import android.content.Intent
           import android.content.pm.PackageManager
           import android.net.Uri
@@ -202,19 +274,16 @@ jobs:
           import androidx.activity.ComponentActivity
           import androidx.core.app.ActivityCompat
           import androidx.core.content.ContextCompat
+          import com.google.firebase.analytics.FirebaseAnalytics
           import org.json.JSONObject
-          import java.io.OutputStreamWriter
           import java.net.HttpURLConnection
           import java.net.URL
-          import java.util.UUID
           import kotlin.concurrent.thread
 
           class MainActivity : ComponentActivity() {
               private lateinit var webView: WebView
+              private lateinit var firebaseAnalytics: FirebaseAnalytics
               private val PERMISSION_REQUEST_CODE = 1001
-
-              private val GA_MEASUREMENT_ID = "G-MDS74ENQJE"
-              private val GA_API_SECRET = "ZMySZVn2QuWfuNw35s4FZQ"
 
               @SuppressLint("SetJavaScriptEnabled")
               override fun onCreate(savedInstanceState: Bundle?) {
@@ -222,7 +291,13 @@ jobs:
                   webView = WebView(this)
                   setContentView(webView)
 
-                  sendAnalyticsHit()
+                  // Official Firebase Init & App Open Event
+                  firebaseAnalytics = FirebaseAnalytics.getInstance(this)
+                  val bundle = Bundle().apply {
+                      putString("screen_name", "MainMapScreen")
+                  }
+                  firebaseAnalytics.logEvent(FirebaseAnalytics.Event.APP_OPEN, bundle)
+
                   checkRemoteUpdate()
                   checkPermissions()
 
@@ -320,65 +395,6 @@ jobs:
                   }
               }
 
-              private fun getOrCreateClientId(): String {
-                  val prefs = getSharedPreferences("amarbus_analytics", Context.MODE_PRIVATE)
-                  var clientId = prefs.getString("client_id", null)
-                  if (clientId == null) {
-                      clientId = UUID.randomUUID().toString()
-                      prefs.edit().putString("client_id", clientId).apply()
-                  }
-                  return clientId
-              }
-
-              private fun sendAnalyticsHit() {
-                  thread {
-                      try {
-                          val clientId = getOrCreateClientId()
-                          val sessionId = System.currentTimeMillis() / 1000
-                          val endpoint = "https://www.google-analytics.com/mp/collect?measurement_id=$GA_MEASUREMENT_ID&api_secret=$GA_API_SECRET"
-                          val url = URL(endpoint)
-                          val conn = url.openConnection() as HttpURLConnection
-                          conn.requestMethod = "POST"
-                          conn.setRequestProperty("Content-Type", "application/json; utf-8")
-                          conn.doOutput = true
-                          conn.connectTimeout = 5000
-                          conn.readTimeout = 5000
-
-                          val jsonBody = """
-                          {
-                            "client_id": "$clientId",
-                            "events": [
-                              {
-                                "name": "page_view",
-                                "params": {
-                                  "session_id": $sessionId,
-                                  "page_location": "https://amarbus.app/",
-                                  "page_title": "Amar Bus App",
-                                  "engagement_time_msec": 1500
-                                }
-                              },
-                              {
-                                "name": "user_engagement",
-                                "params": {
-                                  "session_id": $sessionId,
-                                  "engagement_time_msec": 1500
-                                }
-                              }
-                            ]
-                          }
-                          """.trimIndent()
-
-                          OutputStreamWriter(conn.outputStream).use { writer ->
-                              writer.write(jsonBody)
-                              writer.flush()
-                          }
-
-                          conn.responseCode
-                          conn.disconnect()
-                      } catch (ignored: Exception) {}
-                  }
-              }
-
               private fun checkPermissions() {
                   val permissionsNeeded = mutableListOf<String>()
                   if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -403,7 +419,7 @@ jobs:
           }
           EOF
 
-          # 8. Compile APK
+          # 10. Compile APK
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
