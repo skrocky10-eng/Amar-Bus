@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "995864686457",
+    "project_id": "amarbus-4d0fd",
+    "storage_bucket": "amarbus-4d0fd.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:995864686457:android:30ce6070c1d060516f49a8",
+        "android_client_info": {
+          "package_name": "com.amarbus.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCMJU4VZMdQtnuQe9ygI4MWCbaGtqh9o5A"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
