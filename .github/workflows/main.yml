@@ -92,50 +92,39 @@ jobs:
             echo "google-services.json attached successfully"
           fi
 
-          # 4. Patch Gradle cleanly (Detect .kts or Groovy)
+          # 4. Patch Gradle cleanly (KTS Guaranteed Fix)
           python3 -c '
-          import os
+          import re
 
-          # Root build file patch
-          root_file = "build.gradle.kts" if os.path.exists("build.gradle.kts") else "build.gradle"
-          if os.path.exists(root_file):
-              with open(root_file, "r") as f:
-                  content = f.read()
-              if "com.google.gms:google-services" not in content and "com.google.gms.google-services" not in content:
-                  if "plugins {" in content:
-                      content = content.replace("plugins {", "plugins {\n    id(\"com.google.gms.google-services\") version \"4.4.1\" apply false")
-                  else:
-                      content = "buildscript {\n    dependencies {\n        classpath(\"com.google.gms:google-services:4.4.1\")\n    }\n}\n" + content
-                  with open(root_file, "w") as f:
-                      f.write(content)
-                  print("Patched root:", root_file)
+          # Patch root build.gradle.kts
+          with open("build.gradle.kts", "r") as f:
+              root_c = f.read()
+          if "com.google.gms.google-services" not in root_c:
+              root_c = root_c.replace("plugins {", "plugins {\n    id(\"com.google.gms.google-services\") version \"4.4.1\" apply false")
+              with open("build.gradle.kts", "w") as f:
+                  f.write(root_c)
 
-          # App build file patch
-          app_file = "app/build.gradle.kts" if os.path.exists("app/build.gradle.kts") else "app/build.gradle"
-          if os.path.exists(app_file):
-              with open(app_file, "r") as f:
-                  content = f.read()
+          # Patch app/build.gradle.kts
+          with open("app/build.gradle.kts", "r") as f:
+              app_c = f.read()
 
-              # Add plugin
-              if "com.google.gms.google-services" not in content:
-                  if "plugins {" in content:
-                      if "kts" in app_file:
-                          content = content.replace("plugins {", "plugins {\n    id(\"com.google.gms.google-services\")")
-                      else:
-                          content = content.replace("plugins {", "plugins {\n    id \"com.google.gms.google-services\"")
+          # Remove any applicationIdSuffix from debug
+          app_c = re.sub(r"applicationIdSuffix\s*=\s*\"[^\"]*\"", "applicationIdSuffix = \"\"", app_c)
 
-              # Add dependencies
-              if "firebase-analytics" not in content:
-                  if "dependencies {" in content:
-                      if "kts" in app_file:
-                          dep_block = "dependencies {\n    implementation(platform(\"com.google.firebase:firebase-bom:32.8.0\"))\n    implementation(\"com.google.firebase:firebase-analytics\")"
-                      else:
-                          dep_block = "dependencies {\n    implementation platform(\x27com.google.firebase:firebase-bom:32.8.0\x27)\n    implementation \x27com.google.firebase:firebase-analytics\x27"
-                      content = content.replace("dependencies {", dep_block)
+          # Add Google Services Plugin
+          if "com.google.gms.google-services" not in app_c:
+              app_c = app_c.replace("plugins {", "plugins {\n    id(\"com.google.gms.google-services\")")
 
-              with open(app_file, "w") as f:
-                  f.write(content)
-              print("Patched app:", app_file)
+          # Add Firebase Dependencies
+          if "firebase-analytics" not in app_c:
+              fb_deps = """dependencies {
+              implementation(platform("com.google.firebase:firebase-bom:32.8.0"))
+              implementation("com.google.firebase:firebase-analytics")"""
+              app_c = app_c.replace("dependencies {", fb_deps)
+
+          with open("app/build.gradle.kts", "w") as f:
+              f.write(app_c)
+          print("Successfully patched Kotlin DSL Gradle files without errors.")
           '
 
           # 5. Setup Gradle Wrapper
